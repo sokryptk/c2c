@@ -511,6 +511,14 @@ fn childFailure() noreturn {
     c._exit(127);
 }
 const Spawned = struct { pid: c.pid_t, input: c_int, output: c_int, err: c_int };
+fn setPipeSignal(handler: ?std.c.Sigaction.handler_fn) !void {
+    const action: std.c.Sigaction = .{
+        .handler = .{ .handler = handler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.c.SA.RESTART,
+    };
+    if (std.c.sigaction(.PIPE, &action, null) != 0) return errnoError();
+}
 fn spawn(a: Allocator, args: []const []const u8, overrides: []const common.Env, capture_stderr: bool) !Spawned {
     if (args.len == 0 or args[0].len == 0) return error.InvalidArguments;
     var arena = std.heap.ArenaAllocator.init(a);
@@ -567,12 +575,12 @@ fn spawn(a: Allocator, args: []const []const u8, overrides: []const common.Env, 
     try nonblocking(stderr_pipe[0]);
     // Pipe writes must report EPIPE instead of terminating this process.
     // Restore the conventional disposition in the child before exec.
-    _ = c.signal(c.SIGPIPE, c.SIG_IGN);
+    try setPipeSignal(std.c.SIG.IGN);
     const pid = c.fork();
     if (pid < 0) return errnoError();
     if (pid == 0) {
         _ = c.setpgid(0, 0);
-        _ = c.signal(c.SIGPIPE, c.SIG_DFL);
+        setPipeSignal(std.c.SIG.DFL) catch childFailure();
         if (c.dup2(input[0], c.STDIN_FILENO) < 0 or c.dup2(output[1], c.STDOUT_FILENO) < 0 or c.dup2(if (capture_stderr) stderr_pipe[1] else devnull, c.STDERR_FILENO) < 0) childFailure();
         for ([_]c_int{ input[0], input[1], output[0], output[1], stderr_pipe[0], stderr_pipe[1] }) |fd| closeFd(fd);
         if (devnull > 2) closeFd(devnull);
@@ -962,6 +970,13 @@ test "run deadlines survive continuous output and descendants holding pipes" {
     defer a.free(result.stdout);
     defer a.free(result.stderr);
     try std.testing.expectEqual(@as(i32, 127), result.exit_code);
+}
+test "child restores default SIGPIPE disposition" {
+    const a = std.testing.allocator;
+    const result = try run(a, &.{ "/bin/sh", "-c", "kill -PIPE $$; exit 99" }, &.{}, null, 1000);
+    defer a.free(result.stdout);
+    defer a.free(result.stderr);
+    try std.testing.expectEqual(@as(i32, 128 + c.SIGPIPE), result.exit_code);
 }
 test "interactive child lines preserve buffering EOF and broken pipe safety" {
     const a = std.testing.allocator;
