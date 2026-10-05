@@ -149,6 +149,10 @@ pub fn clone(a: Allocator, value: Value) Allocator.Error!Value {
 pub fn eq(a: []const u8, other: []const u8) bool {
     return std.mem.eql(u8, a, other);
 }
+pub fn oneOf(value: []const u8, choices: []const []const u8) bool {
+    for (choices) |choice| if (eq(value, choice)) return true;
+    return false;
+}
 pub fn join(a: Allocator, parts: []const []const u8) ![]const u8 {
     return std.fs.path.join(a, parts);
 }
