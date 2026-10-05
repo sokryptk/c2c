@@ -1,8 +1,4 @@
-"""Native Codex rollout encoding and registration through Codex's own commands.
-
-Verified with codex-cli 0.159.2. Importing never executes a saved tool call or
-starts a model turn. Database state is owned by `codex migrate-rollouts`.
-"""
+"""Codex rollout adapter, verified against codex-cli 0.159.2."""
 from __future__ import annotations
 
 import base64
@@ -63,12 +59,6 @@ def _blocks(value: Any) -> list[dict]:
 
 def convert(thread: Any, entries: Iterable[dict], *, transcript_path: str | None = None,
             embed_images: bool = True) -> Conversion:
-    """Create both model-facing response records and native display events.
-
-    Claude tool pairs remain completed response call/result pairs. Bash pairs
-    additionally render as native command records; other tools retain complete
-    inputs/results in a native display artifact. Private thinking is excluded.
-    """
     result = Conversion(session_id=session_id(thread.id))
     turn_id: str | None = None
     turn_started = thread.created_at
@@ -156,8 +146,7 @@ def convert(thread: Any, entries: Iterable[dict], *, transcript_path: str | None
                     view.append({'type': 'text', 'text': detail, 'text_elements': []} if role == 'user'
                                 else {'type': 'Text', 'text': detail})
             elif kind not in ('tool_use', 'tool_result'):
-                # Codex does not accept Claude document/search-result blocks as
-                # native input types. Preserve the full block explicitly.
+                # Codex has no native input type for Claude document/search blocks.
                 text = '[Claude attachment]\n' + _json(block)
                 model.append({'type': 'input_text' if role == 'user' else 'output_text', 'text': text})
                 view.append({'type': 'text', 'text': text, 'text_elements': []} if role == 'user'
@@ -181,8 +170,7 @@ def convert(thread: Any, entries: Iterable[dict], *, transcript_path: str | None
             append('compacted', {'message': text, 'replacement_history': [payload],
                                  'compaction_response_id': None, 'latest_token_usage_record': None}, timestamp)
             active = [payload]
-            # Native visible summary is a user event matching Claude's existing
-            # compact-summary record, rather than a fabricated assistant reply.
+            # Claude stores compact summaries as user messages.
             display({'type': 'UserMessage', 'id': message_id, 'content': view}, timestamp)
         else:
             begin(timestamp)
@@ -276,9 +264,7 @@ def convert(thread: Any, entries: Iterable[dict], *, transcript_path: str | None
                        failed=bool(block.get('is_error')))
     complete(last_timestamp)
 
-    # A bounded native context keeps large imported histories resumable. Display
-    # events remain untouched; this explicitly labelled extractive window makes
-    # the complete transcript available for targeted retrieval.
+    # Bound model context without changing the full display history.
     if len(_json(active).encode()) > MAX_ACTIVE_BYTES:
         turns: list[list[dict]] = []
         for entry in active:
@@ -561,7 +547,6 @@ def register(codex_home: str | Path, thread_id: str, title: str, *, codex_binary
 
 
 def unregister(codex_home: str | Path, thread_id: str, *, codex_binary: str = 'codex') -> None:
-    """Remove a verified, unchanged imported session using native cleanup."""
     uuid.UUID(thread_id)
     removed = subprocess.run([codex_binary, 'delete', '--force', thread_id], env=_environment(codex_home),
                              capture_output=True, text=True, timeout=60)

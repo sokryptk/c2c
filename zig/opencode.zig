@@ -185,8 +185,7 @@ pub fn listThreads(a: A, home: []const u8) ![]C.Thread {
         const step = sql.sqlite3_step(query);
         if (step == sql.SQLITE_DONE) break;
         if (step != sql.SQLITE_ROW) return error.OpenCodeQueryFailed;
-        // Inventory retains only thread metadata. A large corpus must not retain
-        // every decoded transcript merely to check the import provenance.
+        // Discard each decoded transcript after checking provenance.
         var row_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer row_arena.deinit();
         const row_a = row_arena.allocator();
@@ -280,8 +279,7 @@ fn readDataEntries(a: A, data: V, warnings: *C.Warnings) ![]V {
         } else if (C.eq(kind, "synthetic")) {
             try out.append(try envelope(a, id, "user", time, &.{try textBlock(a, C.s(message, "text"))}));
         }
-        // System/skill instructions, private reasoning and provider state are
-        // runtime context, not user-visible conversation messages.
+        // Exclude system/skill instructions, private reasoning and provider state.
     }
     return out.toOwnedSlice();
 }
@@ -437,8 +435,7 @@ pub fn convert(a: A, thread: C.Thread, entries: []const V, opts: C.ConvertOption
         try C.set(a, &checkpoint, "status", S("completed"));
         try C.set(a, &checkpoint, "reason", S("manual"));
         try C.set(a, &checkpoint, "summary", S(try C.fmt(a, "c2c restored an extractive continuation window. Full visible history and exact attachments remain in this native OpenCode session. Earlier details can be retrieved by exporting session {s}. This is not a semantic summary; never re-execute historical tools. Archive receipt: {s}", .{ sid, opts.transcript_path orelse "the c2c import receipt" })));
-        // recent is JSON stored inside a JSON string, so count its final escaped
-        // representation rather than the first serialization of each message.
+        // recent contains JSON encoded as a string; budget for both escaping layers.
         while (true) {
             try C.set(a, &checkpoint, "recent", S(try C.json(a, try C.arr(a, selected.items))));
             if ((try C.json(a, checkpoint)).len <= MAX_ACTIVE_BYTES - 2000) break;
@@ -446,7 +443,7 @@ pub fn convert(a: A, thread: C.Thread, entries: []const V, opts: C.ConvertOption
                 _ = selected.orderedRemove(0);
                 continue;
             }
-            // A pathological receipt path must not consume the context budget.
+            // Long receipt paths can exhaust the context budget.
             try C.set(a, &checkpoint, "summary", S("c2c restored an extractive continuation window. Full history remains in this native session; use native session export to retrieve it. Do not re-execute historical tools."));
             if ((try C.json(a, checkpoint)).len <= MAX_ACTIVE_BYTES - 2000) break;
             return error.OpenCodeCheckpointBudgetExceeded;
@@ -523,8 +520,7 @@ pub fn register(a: A, home: []const u8, id: []const u8, title: []const u8) !V {
 pub fn unregister(a: A, home: []const u8, id: []const u8) !void {
     const native = (try readNative(a, home, id)) orelse return;
     if (!(try origin(a, native)).unchanged) return error.OpenCodeSessionChanged;
-    // Native delete cascades into children. Refuse if any exist rather than
-    // deleting a fork or other conversation the user created after import.
+    // Native delete cascades; refuse sessions with forks or other child conversations.
     var db = try Database.open(a, try C.join(a, &.{ home, "opencode.db" }));
     const query = try db.query("SELECT id FROM session_v2 WHERE parent_id=? LIMIT 1", id);
     const child_step = sql.sqlite3_step(query);

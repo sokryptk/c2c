@@ -1,8 +1,3 @@
-"""Opt-in OpenCode v2 native import, resume, round-trip and safe undo tests.
-
-RUN_OPENCODE_INTEGRATION=1 C2C_OPENCODE_BINARY=/path/to/opencode python -m unittest discover -s tests -p test_opencode_integration.py -v
-No production Python modules, real account credentials, or external model calls.
-"""
 from __future__ import annotations
 import json
 import os
@@ -105,7 +100,6 @@ class OpenCodeNativeIntegrationTests(unittest.TestCase):
         request = self._claude_turn(imported.pop(), "Continue after OpenCode.")
         self.assertIn(question, json.dumps(request["messages"]))
         self.assertIn(CLAUDE_REPLY, json.dumps(request["messages"]))
-        # Continued imported session is protected from undo.
         self.migrate("claude", "opencode", "undo")
         self.assertIn(sid, {session["id"] for session in self.sessions()})
 

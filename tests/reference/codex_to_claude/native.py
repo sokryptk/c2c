@@ -1,8 +1,4 @@
-"""Claude Code JSONL encoding. Conversion never executes historical tool calls.
-
-The envelope/parent chain was verified with Claude Code 2.1.289. This is an
-unofficial format adapter; validation is required when Claude changes storage.
-"""
+"""Claude Code JSONL adapter, verified against 2.1.289."""
 from __future__ import annotations
 
 import base64
@@ -115,8 +111,7 @@ def _attachment_blocks(attachments: Iterable[dict], warnings: list[str], embed: 
         if path:
             blocks.append({'type': 'text', 'text': f'Attachment: {path}'})
             if isinstance(url, str) and url.startswith('data:image/'):
-                # A recovered historical image is authoritative even when the
-                # original temporary path has since disappeared or changed.
+                # Recovered bytes take precedence over mutable temporary paths.
                 blocks.extend(_attachment_blocks([{'url': url}], warnings, embed))
                 continue
             image = _image(str(path), warnings, embed)
@@ -139,8 +134,7 @@ def _attachment_blocks(attachments: Iterable[dict], warnings: list[str], embed: 
                         continue
             blocks.append({'type': 'text', 'text': 'An embedded image was attached in Codex.'})
         elif isinstance(url, str) and url.startswith(('https://', 'http://')):
-            # Keep remote links local-only: resuming must not silently fetch an
-            # arbitrary URL or forward its contents to another provider.
+            # Preserve URLs as text so resuming cannot fetch them implicitly.
             blocks.append({'type': 'text', 'text': f'Attachment URL: {url}'})
         else:
             blocks.append({'type': 'text', 'text': 'Codex attachment: ' + _json(attachment)})
@@ -148,7 +142,6 @@ def _attachment_blocks(attachments: Iterable[dict], warnings: list[str], embed: 
 
 
 def _tool_result_blocks(value: Any, warnings: list[str], embed: bool) -> str | list[dict]:
-    """Keep MCP image results as real attachments, with structured data intact."""
     if not isinstance(value, dict) or not isinstance(value.get('content'), list):
         return _json(value)
     blocks: list[dict] = []
@@ -168,13 +161,6 @@ def _tool_result_blocks(value: Any, warnings: list[str], embed: bool) -> str | l
 
 def convert(thread: Any, items: Iterable[Any], compaction: Any = None, *,
             embed_images: bool = True, transcript_path: str | None = None) -> Conversion:
-    """Return native entries for one source thread with deterministic IDs.
-
-    Historical commands become completed native tool pairs. Other structured
-    artifacts stay verbatim in assistant text, so no pending tool is fabricated.
-    A source compaction severs only the active parent chain. Older messages stay
-    in the transcript, as in a conversation compacted by Claude itself.
-    """
     result = Conversion(session_id=session_id(thread.id))
     parent: str | None = None
     sequence = 0
@@ -283,8 +269,7 @@ def convert(thread: Any, items: Iterable[Any], compaction: Any = None, *,
                 append('user', _attachment_blocks(item.attachments, result.warnings, embed_images),
                        item.timestamp)
             return
-        # A source artifact without an equivalent Claude tool is retained in
-        # full rather than guessed into an Edit/Write call with false inputs.
+        # Unknown artifacts cannot safely be translated into native tool calls.
         detail = _json(raw)
         if detail:
             append('assistant', [{'type': 'text', 'text':
@@ -321,10 +306,8 @@ def convert(thread: Any, items: Iterable[Any], compaction: Any = None, *,
     if compaction is not None and compaction.summary and not inserted:
         boundary()
 
-    # Claude's automatic compaction first sends the whole old history to its
-    # model. A large imported thread can exceed that model's input limit before
-    # compaction even starts. Keep the native transcript intact, but create an
-    # explicit continuation checkpoint with a bounded, disclosed recent tail.
+    # Claude sends history to the model before compacting it. Large imports need
+    # a bounded continuation checkpoint to stay within the model's input limit.
     active_start = 0
     for index, entry in enumerate(result.entries):
         if entry.get('subtype') == 'compact_boundary':
@@ -350,8 +333,7 @@ def convert(thread: Any, items: Iterable[Any], compaction: Any = None, *,
         for group in reversed(groups):
             size = sum(len(json.dumps(e['message'], ensure_ascii=False).encode()) for e in group)
             if size > 24_000:
-                # This explicitly marked excerpt is only in the continuation
-                # checkpoint; the original unabridged entry remains above it.
+                # Excerpt only the checkpoint; keep the original entry intact.
                 texts: list[str] = []
                 for entry in group:
                     content = entry['message']['content']
@@ -434,7 +416,6 @@ def convert(thread: Any, items: Iterable[Any], compaction: Any = None, *,
         result.warnings.append('Large thread received a bounded continuation checkpoint; full native history preserved')
 
     title = thread.title.strip() if thread.title else f'Codex {thread.id[:8]}'
-    # Prefix distinguishes an imported title without altering original text.
     result.entries.append({'type': 'c2c-import', 'schemaVersion': 1, 'source': 'codex',
                            'sourceThreadId': thread.id, 'lastMessageUuid': parent,
                            'sessionId': result.session_id})

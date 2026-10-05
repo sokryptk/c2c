@@ -115,8 +115,7 @@ const Records = struct {
             self.ordinal += 1;
             const line = self.buffer[0..length];
             if (std.mem.trim(u8, line, " \t\r\n").len == 0) continue;
-            // This is only a fast prefilter. The parsed root type is checked
-            // below; apparent record JSON inside output text cannot match it.
+            // The later root-type check rejects JSON embedded in output text.
             if (self.compactions_only and std.mem.indexOf(u8, line[0..@min(512, line.len)], "compacted") == null) continue;
             _ = self.arena.reset(.retain_capacity);
             const value = H.parse(self.arena.allocator(), line) catch {
@@ -497,10 +496,9 @@ fn appendRollout(a: A, items: *Items, thread: Thread, offset: u64, start_ordinal
     }
 }
 
-/// Display projections sometimes represent a native tool exchange only as an
-/// AgentMessage. Keep the actual call/result pair as well. A projected tool's
-/// ID or a verified tool event inside an enclosing call proves that the tool
-/// already has a structured representation and suppresses that raw wrapper.
+/// Recover call/result pairs shown only as AgentMessage projections. Suppress
+/// a raw wrapper only when its ID or an enclosed tool event matches a
+/// structured projection.
 const ToolRecovery = struct {
     const Call = struct {
         id: []const u8,
@@ -614,9 +612,8 @@ const ToolRecovery = struct {
                     }
                 }
                 if (!exact) {
-                    // A nearby display event can belong to a background agent.
-                    // Only known orchestration wrappers can be identified by
-                    // their enclosed events when IDs do not match directly.
+                    // Nearby events may belong to background agents. Match
+                    // enclosed events only for known orchestration wrappers.
                     const event_kind = H.s(H.get(data, "item"), "type");
                     var wrappers: usize = 0;
                     for (self.pending.items) |*call| {
@@ -637,9 +634,8 @@ const ToolRecovery = struct {
             return;
         }
         if (!eq(H.s(record.value, "type"), "response_item")) return;
-        // Native runtimes can append display completion events after their
-        // response output. Keep this completed batch until the next call or
-        // user turn so those events can still identify a projected wrapper.
+        // Display completion can follow the response output. Retain completed
+        // calls until the next call or user turn to match those late events.
         if (oneOf(kind, &.{ "function_call", "custom_tool_call" }) or
             (eq(kind, "message") and eq(H.s(data, "role"), "user"))) try self.flushCompleted();
         const call_id = H.s(data, "call_id");

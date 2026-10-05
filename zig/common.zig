@@ -1,7 +1,7 @@
 const std = @import("std");
 pub const c = @cImport({
-    // Import the libc ABI directly. glibc's fortified variadic inline wrappers
-    // cannot be translated by Zig's C importer in optimized builds.
+    // Zig's C importer cannot translate glibc's fortified variadic inline
+    // wrappers in optimized builds.
     @cUndef("_FORTIFY_SOURCE");
     @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("stdio.h");

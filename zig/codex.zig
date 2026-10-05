@@ -334,8 +334,7 @@ pub fn convert(a: A, thread: C.Thread, entries: []const V, opts: C.ConvertOption
     _ = encoder.encode(encoded, original_id);
     const digest = try fingerprint(a, self.rows.items);
     try C.set(a, &metadata, "originator", S(try C.fmt(a, "c2c:{s}:{s}:{s}", .{ provider, encoded, digest })));
-    // Object maps share allocated storage, but explicitly reassign the header
-    // so adding a field can never leave a stale copy after map reallocation.
+    // Reassign the header to avoid a stale copy after map reallocation.
     try C.set(a, &self.rows.items[0], "payload", metadata);
     if ((try validate(a, self.rows.items)).len != 0) return error.InvalidCodexRollout;
     return .{ .entries = try self.rows.toOwnedSlice(), .warnings = try self.warnings.toOwnedSlice(), .message_count = self.messages, .tool_count = self.tools, .source_item_count = self.source_count, .session_id = self.id };
@@ -557,9 +556,9 @@ const Server = struct {
 pub fn register(a: A, home: []const u8, id: []const u8, title: []const u8) !V {
     if (!C.validUuid(id)) return error.InvalidCodexSessionId;
     const path = try preflight(a, home, id);
-    // Native read discovers a newly published legacy file and backfills its
-    // SQLite metadata. migrate-rollouts alone can fail missing_sqlite_metadata
-    // for old-dated files or a destination whose initial backfill is complete.
+    // thread/read backfills SQLite metadata for new legacy files. Without it,
+    // migrate-rollouts can fail missing_sqlite_metadata for older files or
+    // destinations whose initial backfill is complete.
     var server = try Server.start(a, home);
     defer server.child.close();
     try server.initialize();
@@ -652,8 +651,8 @@ pub fn unregister(a: A, home: []const u8, id: []const u8) !void {
         if (!try nativeAbsent(a, home, id)) return error.CodexNativeRemovalIncomplete;
         return;
     }
-    // Recovery may repeat an already completed native delete. Accept only the
-    // native missing-session failure and independently prove no live state.
+    // Recovery may retry a completed delete. Accept a missing-session failure
+    // only after verifying that no live state remains.
     if (result.exit_code == 1 and std.mem.endsWith(u8, std.mem.trim(u8, result.stderr, " \t\r\n"), "Error: failed to delete session") and try nativeAbsent(a, home, id)) return;
     return error.CodexNativeRemovalFailed;
 }

@@ -207,7 +207,7 @@ pub fn readOrigin(a: A, thread: C.Thread) !Origin {
         }
         hashRow(arena.allocator(), &hash, row, thread.rollout_path) catch return origin;
         count += 1;
-        // Our marker is immediately after the header; ordinary sessions need no full read.
+        // Provenance follows the header; native sessions need no full read.
         if (count >= 3 and origin.id == null) return .{};
     }
     if (origin.id != null) origin.unchanged = C.eq(expected, try digest(a, &hash));
@@ -355,7 +355,7 @@ fn appendNativeEntry(a: A, output: *Values, row: V, thread: C.Thread, warnings: 
     } else if (is(row, "message") and C.eq(role, "fileMention")) {
         try output.append(try envelope(a, "user", try blocks(a, S(try C.fmt(a, "[OMP file attachment]\n{s}", .{try C.json(a, message)}))), id, ts));
     }
-    // Developer/session_init/custom runtime state and private reasoning never enter visible IR.
+    // Exclude developer/session_init/custom runtime state and private reasoning.
 }
 pub fn readEntries(a: A, thread: C.Thread, warnings: *C.Warnings) ![]V {
     const raw = try C.readJsonl(a, thread.rollout_path, warnings);
@@ -489,7 +489,7 @@ const Builder = struct {
                 }
                 try self.warnings.append("Invalid source image base64; original attachment retained as text");
             }
-            // OMP's portable image contract requires actual base64, not an HTTP URL.
+            // Portable OMP images require base64 data, not HTTP URLs.
             const description = if (!self.opts.embed_images) "[Image attachment; bytes remain in the original transcript]" else try C.fmt(self.a, "[Source image attachment]\n{s}", .{try C.json(self.a, block)});
             if (self.opts.embed_images) try self.warnings.append("Image is not portable base64; complete source attachment preserved as text");
             return try C.obj(self.a, &.{ .{ "type", S("text") }, .{ "text", S(description) } });

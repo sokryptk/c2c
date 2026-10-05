@@ -90,8 +90,7 @@ const Metadata = struct {
     origin_id: []const u8 = "",
 };
 fn readMetadata(a: A, path: []const u8) !Metadata {
-    // Inventory must not retain large tool results or image payloads. Each
-    // source line has its own parse lifetime; only selected metadata survives.
+    // Free each parsed line so inventory retains metadata, not tool results or images.
     var reader = try common.LineReader.open(std.heap.page_allocator, path);
     defer reader.close();
     var meta: Metadata = .{};
@@ -404,8 +403,7 @@ fn nativeMessage(a: A, role: []const u8, content: V, identifier: []const u8) !V 
     return message;
 }
 fn messageCost(a: A, role: []const u8, content: V) !usize {
-    // This exact final envelope is also used by append(). It is essential to
-    // count it for short image excerpts, where envelope bytes dominate text.
+    // Include append()'s envelope; its bytes dominate short image excerpts.
     return (try common.json(a, try nativeMessage(a, role, content, "00000000-0000-0000-0000-000000000000"))).len;
 }
 fn imageBlock(a: A, mime: []const u8, encoded: []const u8) !V {
@@ -588,8 +586,7 @@ const Encoder = struct {
             if (eq(kind, "text") or eq(kind, "input_text") or eq(kind, "output_text")) {
                 try output.append(try textBlock(self.a, s(part, "text")));
             } else if (!eq(kind, "reasoning") and !eq(kind, "encrypted_text")) {
-                // source.content already resolved local paths and recovered
-                // attachment bytes. Reuse them in their original block order.
+                // Reuse normalized attachments in their original block order.
                 if (attachment_index < item.attachments.len) {
                     try output.appendSlice(try attachmentBlocks(self.a, item.attachments[attachment_index .. attachment_index + 1], &self.warnings, self.opts.embed_images));
                     attachment_index += 1;
@@ -610,8 +607,7 @@ const Encoder = struct {
         const raw = item.raw orelse nullv;
         const call_id = s(raw, "call_id");
         if (eq(item.kind, "function_call") or eq(item.kind, "custom_tool_call")) {
-            // A new call following an output starts another exchange. Within
-            // parallel batches, both call order and result order are retained.
+            // Start a new exchange after any output; preserve call and result order within each batch.
             if (self.raw_results.items.len > 0) try self.flushRaw();
             if (call_id.len == 0 or self.raw_pending.contains(call_id)) return error.InvalidRawCodexToolIdentity;
             var args = get(raw, if (eq(item.kind, "custom_tool_call")) "input" else "arguments");
@@ -930,7 +926,7 @@ fn closePending(encoder: *Encoder, pending: *std.StringHashMap([]const u8), time
     var ids = std.array_list.Managed([]const u8).init(encoder.a);
     var iterator = pending.valueIterator();
     while (iterator.next()) |id| try ids.append(id.*);
-    // Hash-map iteration is not part of the stable on-disk contract.
+    // Sort for deterministic on-disk order.
     std.mem.sort([]const u8, ids.items, {}, struct {
         fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
             return std.mem.order(u8, lhs, rhs) == .lt;

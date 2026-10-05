@@ -1,10 +1,3 @@
-"""Local, reversible installation of native Claude Code conversation files.
-
-The manifest is an installation journal, not a conversation archive. No source
-file is ever modified. A destination is published with an exclusive hard link,
-so an existing Claude conversation cannot be overwritten, even during a race.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -266,8 +259,7 @@ def _result(rows: list[dict[str, Any]], **extra) -> dict[str, Any]:
 def _warning_groups(messages: list[str]) -> dict[str, int]:
     groups: dict[str, int] = {}
     for message in messages:
-        # Attachment details remain in the private manifest. CLI summaries only
-        # need a count by reason, not a repeated path for every image or video.
+        # Keep attachment paths in the private manifest, out of CLI summaries.
         group = message.split(": ", 1)[0]
         groups[group] = groups.get(group, 0) + 1
     return groups
@@ -372,7 +364,6 @@ def _recover(options, manifest: dict[str, Any]) -> None:
 def _install(options, manifest: dict[str, Any], record: dict[str, Any]) -> None:
     target = _safe_target(options, record["targetPath"])
     _private_directory(target.parent)
-    # Re-check after directory creation, before touching any file.
     _safe_target(options, target)
     if target.exists() or target.is_symlink():
         record["status"] = "collision"
@@ -396,8 +387,8 @@ def _install(options, manifest: dict[str, Any], record: dict[str, Any]) -> None:
     else:
         _sync_directory(target.parent)
         record.update(status="pending-registration" if _direction(options) == "claude-to-codex" else "installed", installedAt=_now())
-    # Keep the hard link until the journal durably records the outcome. A crash
-    # between publication and saving can then be recovered without guessing.
+    # Retain the hard link until the journal is durable so crash recovery can
+    # distinguish our installation from a collision.
     _save(options, manifest)
     temporary.unlink(missing_ok=True)
     record.pop("installTemporary", None)
@@ -405,7 +396,6 @@ def _install(options, manifest: dict[str, Any], record: dict[str, Any]) -> None:
 
 
 def _complete_registration(options, manifest: dict[str, Any], record: dict[str, Any]) -> None:
-    """Ask Codex's own migrator to populate its state and history projection."""
     from .codex_native import register, registration_matches, validate
 
     target = _safe_target(options, record["targetPath"])
@@ -434,8 +424,7 @@ def _source_stamp(thread) -> dict[str, Any]:
     try:
         stat = path.stat()
     except FileNotFoundError:
-        # The projection database can hold a complete display history after a
-        # rollout has moved or been removed. Let the source reader decide.
+        # The projection database may retain history after the rollout is gone.
         return {"path": str(path), "missing": True, "updatedAt": thread.updated_at}
     return {"path": str(path), "bytes": stat.st_size, "mtimeNs": stat.st_mtime_ns, "updatedAt": thread.updated_at}
 
@@ -477,8 +466,7 @@ def migrate(options) -> dict[str, Any]:
                     rows.append(row | {"status": "already-origin", "originalThreadId": original})
                     _progress(options, index, len(threads), identifier, "already-origin")
                     continue
-            # Every previous installed destination is immutable, including a
-            # continued conversation and a conversation deleted by its owner.
+            # Do not reinstall a destination its owner continued or deleted.
             if old and old.get("status") not in {"error", "undone", "metadata-only", "staged", "already-origin"}:
                 status = _inspect(options, old)["status"]
                 row.update(status="unchanged" if status == "verified" else status, sessionId=old.get("sessionId"), targetPath=old.get("targetPath"))
@@ -607,9 +595,8 @@ def undo(options) -> dict[str, Any]:
                 elif _digest(target) != record["sha256"]:
                     row.update(status="preserved", reason="continued-or-modified")
                 else:
-                    # Retain the same inode before unlinking the native path.
-                    # A concurrent Claude append through an already-open file
-                    # descriptor reaches this backup, so undo cannot destroy it.
+                    # Retain the inode so concurrent appends through open file
+                    # descriptors reach the backup after the native path is gone.
                     backup = _safe_target(options, record["undoBackupPath"]) if record.get("undoBackupPath") else target.with_name(f".codex-undo-{uuid.uuid4().hex}.retained")
                     record.update(status="undoing", undoBackupPath=str(backup))
                     _save(options, manifest)

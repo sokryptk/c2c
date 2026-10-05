@@ -1,10 +1,3 @@
-"""Read native Claude Code conversations without modifying their storage.
-
-The canonical parent chain identifies the active branch. A compaction's
-logicalParentUuid links its archived history, so exports can retain both the
-old visible conversation and the summary Claude actually continues from.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -54,7 +47,6 @@ def _human_prompt(entry: dict[str, Any]) -> str:
 
 
 def _metadata(path: Path) -> dict[str, Any]:
-    """Scan once without keeping large tool bodies or images in memory."""
     meta: dict[str, Any] = {"count": 0}
     for _, entry in _records(path):
         kind = entry.get("type")
@@ -105,12 +97,6 @@ def list_claude_threads(
     home: str | Path, *, import_records: Iterable[dict[str, Any]] = (),
     include_imported: bool = False, include_subagents: bool = False,
 ) -> list[ClaudeThread]:
-    """Discover roots, optionally subagents, and avoid unchanged import loops.
-
-    ``import_records`` accepts the forward migration manifest's imports.values().
-    An exact installed hash identifies legacy imports lacking an embedded c2c
-    marker. Continued imports remain eligible and retain original_codex_id.
-    """
     root = Path(home).expanduser().resolve() / "projects"
     records = {record["sessionId"]: record for record in import_records
                if isinstance(record, dict) and record.get("sessionId")}
@@ -128,6 +114,7 @@ def list_claude_threads(
                 continue
         record = records.get(path.stem)
         try:
+            # Legacy imports have no embedded marker; match the manifest hash.
             if record and record.get("sha256") and _digest(path) == record["sha256"]:
                 if include_imported:
                     threads.append(_manifest_thread(path, record))
@@ -195,6 +182,7 @@ def _full_chain(entries: list[dict[str, Any]], *, sidechain: bool) -> list[dict[
         chain.append(current)
         parent = current.get("parentUuid")
         if parent is None and current.get("type") == "system" and current.get("subtype") == "compact_boundary":
+            # Compaction severs the active chain but links archived history here.
             parent = current.get("logicalParentUuid")
         if parent and parent not in indexed:
             warnings.warn(f"Claude conversation references an unavailable historical parent: {parent}", SourceWarning, stacklevel=2)
@@ -203,11 +191,7 @@ def _full_chain(entries: list[dict[str, Any]], *, sidechain: bool) -> list[dict[
 
 
 def read_claude_entries(thread: Thread) -> Iterator[dict[str, Any]]:
-    """Yield canonical visible history; target encoders rebuild their own links.
-
-    Keeps original UUID/parent fields as provenance. Compaction boundaries are
-    the only system records returned. No hidden model thinking is exported.
-    """
+    """Yield the active branch with compaction history, excluding private thinking."""
     entries = [entry for _, entry in _records(thread.rollout_path)
                if isinstance(entry.get("uuid"), str)
                and entry.get("type") in ("user", "assistant", "system", "attachment", "progress")]

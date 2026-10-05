@@ -1,5 +1,3 @@
-"""Native session invariants that affect lossless, resumable conversion."""
-
 from __future__ import annotations
 
 import base64
@@ -17,7 +15,7 @@ from codex_to_claude.source import Compaction, Item, Thread
 
 
 TIMESTAMP = "2026-10-06T00:00:00.000Z"
-# Actual 1x1 PNG; fixtures never depend on a user's image files.
+# 1x1 PNG.
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=")
 
 
@@ -102,8 +100,7 @@ class NativeConversionTests(unittest.TestCase):
         self.assertIs(metadata["isError"], False)
 
     def test_many_small_image_excerpts_include_native_envelope_in_context_budget(self):
-        # Large image records shrink to very small excerpt text, so counting
-        # text alone underestimates hundreds of restored assistant envelopes.
+        # Excerpts shrink image data, but each native message envelope still counts.
         encoded = base64.b64encode(PNG + b"\0" * 21_000).decode()
         items = [self.item("user", "Synthetic image archive")]
         for ordinal in range(1, 901):
@@ -115,8 +112,6 @@ class NativeConversionTests(unittest.TestCase):
         actual_bytes = sum(len(json.dumps(entry.get("message", {}), ensure_ascii=False).encode())
                            for entry in active)
         self.assertLessEqual(actual_bytes, MAX_ACTIVE_BYTES)
-        # The checkpoint may excerpt its model context; original image bytes
-        # must still remain present for every archived tool result.
         originals = [entry for entry in result.entries if entry.get("type") == "user"
                      and isinstance(entry.get("message", {}).get("content"), list)]
         self.assertEqual(sum(1 for entry in originals for block in entry["message"]["content"]

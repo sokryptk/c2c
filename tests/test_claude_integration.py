@@ -1,11 +1,3 @@
-"""Opt-in, offline tests against the installed Claude Code session loader.
-
-RUN_CLAUDE_INTEGRATION=1 python -m unittest discover -s tests -p test_claude_integration.py -v
-
-Only synthetic conversations enter the CLI. A loopback HTTP server supplies the
-model response; no account credentials or normal Claude configuration is loaded.
-"""
-
 from __future__ import annotations
 
 import json
@@ -304,7 +296,6 @@ class ClaudeNativeResumeTests(unittest.TestCase):
                     except OSError:
                         break
                 if not approved_fake_key and b"ANTHROPIC_API_KEY" in output:
-                    # Approve only the hardcoded synthetic key in our temp config.
                     os.write(master, b"\x1b[A\r")
                     approved_fake_key = True
                 if b"migration" in output:
@@ -342,7 +333,6 @@ class ClaudeNativeResumeTests(unittest.TestCase):
 
 
 def verify_exported_corpus(config_directory: str) -> dict:
-    """Read every staged session with Anthropic's SDK, without sending requests."""
     from claude_agent_sdk import get_session_messages, list_sessions
 
     config = Path(config_directory).resolve()

@@ -150,7 +150,6 @@ class CodexNativeTests(unittest.TestCase):
             self.assertEqual(imported.original_claude_id, self.thread.id)
             self.assertTrue(imported.unchanged_import)
             self.assertIn('commandExecution', [item.kind for item in read_items(imported, home)])
-            # Native title retry must preserve a user rename.
             register(home, converted.session_id, 'Different retry title')
             self.assertEqual(next(t for t in list_threads(home) if t.id == converted.session_id).title,
                              'Synthetic imported title')
@@ -161,8 +160,7 @@ class CodexNativeTests(unittest.TestCase):
             self.assertFalse(changed.unchanged_import)
             with self.assertRaisesRegex(RuntimeError, 'changed before native registration'):
                 _registration_preflight(home, converted.session_id)
-            # This isolated fixture is ours; restore unchanged bytes before
-            # testing official undo, as the real CLI requires.
+            # Undo requires the original registered bytes.
             destination.write_text(''.join(json.dumps(row) + '\n' for row in migrated))
             unregister(home, converted.session_id)
             self.assertFalse(destination.exists())

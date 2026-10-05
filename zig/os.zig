@@ -495,8 +495,7 @@ fn makePipe() ![2]c_int {
         closeFd(fds[1]);
     }
     for (&fds) |*fd| {
-        // Keep originals out of stdio range so dup2/close is correct even if
-        // our caller started with stdin, stdout, or stderr closed.
+        // Avoid dup2/close collisions when the caller has closed a stdio fd.
         if (fd.* < 3) {
             const replacement = c.fcntl(fd.*, c.F_DUPFD_CLOEXEC, @as(c_int, 3));
             if (replacement < 0) return errnoError();
@@ -562,8 +561,7 @@ fn spawn(a: Allocator, args: []const []const u8, overrides: []const common.Env, 
         closeFd(devnull);
         devnull = replacement;
     }
-    // These are only the parent's ends. The child uses the opposite ends,
-    // whose file descriptions retain blocking semantics.
+    // Only the parent's pipe ends are nonblocking; the child's stay blocking.
     try nonblocking(input[1]);
     try nonblocking(output[0]);
     try nonblocking(stderr_pipe[0]);

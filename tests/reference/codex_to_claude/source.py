@@ -1,9 +1,4 @@
-"""Read-only, streaming readers for Codex's local conversation stores.
-
-The projected history is the display transcript; rollout response records supply
-legacy histories and any live tail not yet projected. No reasoning or runtime
-system/developer instructions are returned.
-"""
+"""Prefer display projections; use rollouts for legacy history and live tails."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -154,8 +149,7 @@ def _records(path: Path, *, start_offset: int = 0, start_ordinal: int = 0,
 def _metadata(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    # Session metadata is always the first source record. Do not inspect private
-    # instruction fields, and do not read the remainder just for discovery.
+    # Session metadata is the first rollout record.
     records = _records(path)
     try:
         _, first = next(records)
@@ -280,8 +274,7 @@ def _content(content: Any) -> tuple[str, tuple[dict[str, Any], ...]]:
                 url = f"data:{mime or 'image/png'};base64,{part['data']}"
             item = {k: v for k, v in {"path": path, "url": url, "media_type": mime,
                     "name": part.get("name") or part.get("filename"), "type": kind}.items() if v is not None}
-            # Files may refer to a provider upload ID or embedded file payload
-            # instead of a path. Retain those rather than losing the attachment.
+            # Upload IDs and embedded payloads need not have a filesystem path.
             for key in ("file_id", "file_data", "file_url"):
                 if key in part:
                     item[key] = part[key]
@@ -373,13 +366,10 @@ def _rollout_items(thread: Thread, *, start_offset: int = 0, start_ordinal: int 
 
 
 def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
-    """Recover historical image snapshots without treating proximity as identity.
+    """Recover raw images by event ordinal/id and tool call id.
 
-    Display image paths can disappear or be overwritten after a turn. The raw
-    user message or completed tool result still contains the image sent to the
-    model. Match projected events by ordinal AND id, then bind tool results by
-    call id. Multiple image events or concurrent calls are deliberately not
-    assigned by position: an exec script may emit images in a different order.
+    Display paths may be overwritten. Event order cannot identify images across
+    concurrent calls or multiple images emitted by one exec script.
     """
     targets = {item.ordinal: item for item in items
                if item.kind in ("userMessage", "imageView")
@@ -407,8 +397,7 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
         for index, part in zip(indices, parts):
             _, parsed = _content([part])
             url = parsed[0].get("url") if parsed else None
-            # Recovery is strictly local. Remote references remain display
-            # references and must never trigger a fetch during migration.
+            # Remote references must not trigger a fetch during migration.
             if not isinstance(url, str) or not url.startswith("data:image/"):
                 return False
             attachments[index] = dict(attachments[index], url=url)
@@ -443,7 +432,6 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
             event_paths.append(str(path))
         return event_paths == [a.get("path") for a in item.attachments if a.get("type") == "localImage"]
 
-    # One bounded rollout snapshot for the whole thread, never a scan per path.
     for ordinal, record in _records(thread.rollout_path):
         data = record.get("payload", {})
         if not isinstance(data, dict):
@@ -508,11 +496,9 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
 
 
 def read_items(thread: Thread, codex_home: str | Path) -> Iterator[Item]:
-    """Yield display history in source order, with an unprojected rollout tail.
+    """Yield display history plus its unprojected rollout tail.
 
-    Fork provenance is retained on Thread. Compacted inherited branch context is
-    available through read_compaction; we never concatenate a parent's later
-    messages into a branch because that would change the branch's history.
+    Parent messages are not appended; read_compaction supplies inherited context.
     """
     home = Path(codex_home).expanduser().resolve()
     database = _latest_database(home, "thread_history")

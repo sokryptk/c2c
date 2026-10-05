@@ -1,15 +1,3 @@
-"""Twelve directed provider migrations through the compiled native executable.
-
-Build first, then run:
-  RUN_PROVIDER_MATRIX=1 C2C_OPENCODE_BINARY=/path/to/opencode \
-    python3 -m unittest discover -s tests -p test_provider_matrix.py -v
-
-The fixtures are independently authored native records, not output from a Python
-converter. OpenCode fixtures use its native standalone import to initialize the
-real v2 schema. Continuations are synthetic native writes; dedicated integration
-suites separately exercise actual provider resume/model requests. Every home,
-configuration, source, target, journal and database lives in a temporary tree.
-"""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -326,9 +314,7 @@ class ProviderMatrixTests(unittest.TestCase):
 
     def append_continuation(self, provider, sid, path):
         if provider == "opencode":
-            # Simulate native persistence in this temporary DB only. Native
-            # resume compatibility is exercised separately, without duplicating
-            # paid/model-turn tests across all twelve route combinations.
+            # Simulate a saved reply; the integration suite exercises native resume.
             messages = [self.open_message("user", CONTINUED_USER), self.open_message("assistant", CONTINUED_ANSWER)]
             with database(self.homes[provider] / "opencode.db") as db:
                 seq = db.execute("SELECT COALESCE(MAX(seq),0) FROM session_message WHERE session_id=?", (sid,)).fetchone()[0]
@@ -385,8 +371,7 @@ class ProviderMatrixTests(unittest.TestCase):
         if target == "opencode":
             with database(self.homes[target] / "opencode.db") as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM session_v2 WHERE id=?", (target_id,)).fetchone()[0], 0)
-        # A crash may occur after native deletion but before the undo journal
-        # is finalized. Recovery must verify absence and finish idempotently.
+        # Simulate a crash after native deletion, before the journal is finalized.
         manifest_path = self.root / "journals" / f"{source}-to-{target}" / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         manifest["imports"][source_id]["status"] = "undoing"

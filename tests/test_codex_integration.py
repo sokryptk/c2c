@@ -1,10 +1,3 @@
-"""Opt-in real Codex loader/continuation tests with a loopback Responses mock.
-
-RUN_CODEX_INTEGRATION=1 python -m unittest discover -s tests -p test_codex_integration.py -v
-
-Every transcript, home directory, model response, and credential is synthetic.
-The native CLI never receives the user's normal configuration or credentials.
-"""
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,7 +26,6 @@ class _ResponsesHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        # Unexpected discovery requests must stay local and cannot authenticate.
         self.server.requests.append((self.path, None))
         self.send_response(404)
         self.end_headers()
@@ -109,8 +101,7 @@ class CodexNativeResumeTests(unittest.TestCase):
             "mcp_servers": {}, "project_doc_max_bytes": 0,
             "approval_policy": "never", "model_reasoning_effort": "low",
         }
-        # Native startup unpacks bundled skills even into a new CODEX_HOME;
-        # disable them explicitly so fixtures exercise only the imported chat.
+        # Codex installs bundled skills even in a fresh home.
         self.disabled_skills = [str(self.home / "skills" / ".system" / name / "SKILL.md")
                                 for name in ("imagegen", "openai-docs", "skill-creator", "skill-installer")]
 
@@ -139,7 +130,6 @@ class CodexNativeResumeTests(unittest.TestCase):
         converted = codex_native.convert(thread, entries, transcript_path=str(path))
         path.parent.mkdir(parents=True)
         path.write_text("".join(json.dumps(row) + "\n" for row in converted.entries))
-        # The production helper inherits environment; isolate that too.
         with patch.dict(os.environ, self.env, clear=True):
             codex_native.register(self.home, converted.session_id, thread.title, codex_binary=self.binary)
         self.assertEqual(self.server.requests, [])
@@ -221,7 +211,7 @@ class CodexNativeResumeTests(unittest.TestCase):
         self.assertIn(recent, active)
 
     def test_uploaded_and_tool_result_images_reach_native_model_request(self):
-        # Valid 2x2 red PNG bytes, including CRCs; no user file is involved.
+        # 2x2 red PNG.
         encoded = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg=="
         image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": encoded}}
         entries = [
@@ -262,8 +252,7 @@ class CodexNativeResumeTests(unittest.TestCase):
 
     def test_large_single_turn_has_bounded_continuation(self):
         entries = [self._entry("user", "Synthetic newest task: preserve the sample green color.")]
-        # Claude streams can contain many assistant messages before the next
-        # real user turn, rather than one bounded assistant response.
+        # A single Claude turn can span many assistant messages.
         entries.extend(self._entry("assistant", f"Synthetic work item {index}. " + "a" * 22_000)
                        for index in range(20))
         entries.append(self._entry("assistant", "Synthetic final state: sample remains green."))

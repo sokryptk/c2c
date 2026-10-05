@@ -1,23 +1,3 @@
-"""Opt-in native OMP discovery and continuation, using only synthetic data.
-
-Install the official can1357/oh-my-pi runtime and Bun in a private directory:
-  npm install --prefix /tmp/c2c-omp-runtime bun @oh-my-pi/pi-coding-agent
-  zig build
-  RUN_OMP_INTEGRATION=1 \
-    BUN_BINARY=/tmp/c2c-omp-runtime/node_modules/.bin/bun \
-    OMP_BINARY=/tmp/c2c-omp-runtime/node_modules/.bin/omp \
-    python -m unittest discover -s tests -p test_omp_integration.py -v
-
-Verified with OMP 18.6.1 and Bun 1.4.2. The npm source distribution is needed for
-native SessionManager reader checks. If npm skips Bun's install script, run
-``node install.js`` in the private prefix's ``node_modules/bun`` directory.
-OMP_PACKAGE_DIR can override its location, and C2C_BINARY can override the Zig
-executable. Tests never install packages themselves. HOME, agent configuration,
-sessions, and credentials are temporary. The official test-runtime flag disables
-catalog networking; a Bun preload additionally rejects every fetch except this
-test's loopback server. Historical tool calls are never executed.
-"""
-
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

@@ -86,8 +86,7 @@ class CliTests(_CliFixture):
         thread = self.thread()
         self.call("migrate")
         target = self.target(thread)
-        # A title update is a real native metadata record; it is a modification
-        # worth protecting even when no new model turn has been sent yet.
+        # A title edit alone must protect the imported session from undo.
         with target.open("a") as stream:
             stream.write(json.dumps({"type": "custom-title", "sessionId": target.stem, "customTitle": "Continued in Claude"}) + "\n")
         continued_bytes = target.read_bytes()
@@ -308,8 +307,6 @@ class CliTests(_CliFixture):
 
 
 class ReverseCliTests(_CliFixture):
-    """Exercise the actual reverse reader/encoder; mock native registration only."""
-
     def setUp(self):
         super().setUp()
         original = self.thread()

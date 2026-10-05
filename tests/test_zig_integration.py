@@ -1,12 +1,3 @@
-"""Real CLI round trips through the compiled Zig c2c, with loopback models.
-
-Build first: zig build
-RUN_C2C_INTEGRATION=1 python -m unittest discover -s tests -p test_zig_integration.py -v
-
-Only stdlib test code is required. This module does not import either Python
-converter: all migrations under test go through the compiled native executable.
-Homes, histories, images, auth, and model replies are isolated synthetic data.
-"""
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
