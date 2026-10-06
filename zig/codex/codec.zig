@@ -1,56 +1,74 @@
 const std = @import("std");
-const C = @import("../common.zig");
-const V = C.Value;
-const A = C.Allocator;
-const S = C.str;
-const N = C.num;
+const common = @import("../common.zig");
+const format = @import("format.zig");
+const Value = common.Value;
+const Allocator = common.Allocator;
+const jsonString = common.str;
+const jsonInteger = common.num;
 const namespace = "b18998c2-4d26-40bd-9c20-2dd493c3a146";
-pub const format_version = "0.159.2";
 const max_active_bytes = 240_000;
 const recent_bytes = 170_000;
 
-pub fn sessionId(a: A, id: []const u8) ![]const u8 {
-    return C.sessionIdFor(a, "codex", "claude", id);
+pub const format_version = format.format_version;
+pub const sessionId = format.sessionId;
+pub const targetPath = format.targetPath;
+pub const targetPathFor = format.targetPathFor;
+pub const validate = format.validate;
+pub const registrationMatches = format.registrationMatches;
+pub const Origin = format.Origin;
+pub const readOrigin = format.readOrigin;
+
+fn is(v: Value, kind: []const u8) bool {
+    return common.eq(common.stringField(v, "type"), kind);
 }
-pub fn targetPath(a: A, thread: C.Thread, home: []const u8) ![]const u8 {
-    return targetPathFor(a, thread, home, "claude");
+
+fn blocks(allocator: Allocator, v: Value) ![]const Value {
+    if (v != .string) {
+        return common.list(v);
+    }
+    if (v.string.len == 0) {
+        return &.{};
+    }
+    const text = try common.obj(allocator, &.{ .{ "type", jsonString("text") }, .{ "text", v } });
+    return common.list(try common.arr(allocator, &.{text}));
 }
-pub fn targetPathFor(a: A, thread: C.Thread, home: []const u8, provider: []const u8) ![]const u8 {
-    const ts = try C.timestamp(a, try C.timestampMillis(thread.created_at));
-    if (ts.len < 19) return error.InvalidTimestamp;
-    const stamp = try a.dupe(u8, ts[0..19]);
-    for (stamp) |*ch| if (ch.* == ':') {
-        ch.* = '-';
-    };
-    return C.join(a, &.{ home, "sessions", ts[0..4], ts[5..7], ts[8..10], try C.fmt(a, "rollout-{s}-{s}.jsonl", .{ stamp, try C.sessionIdFor(a, "codex", provider, thread.id) }) });
-}
-fn is(v: V, kind: []const u8) bool {
-    return C.eq(C.s(v, "type"), kind);
-}
-fn blocks(a: A, v: V) ![]const V {
-    if (v == .string) return if (v.string.len == 0) &.{} else C.list(try C.arr(a, &.{try C.obj(a, &.{ .{ "type", S("text") }, .{ "text", v } })}));
-    return C.list(v);
-}
-fn uri(a: A, path: []const u8) ![]const u8 {
-    if (path.len == 0 or path[0] != '/') return error.AbsoluteWorkingDirectoryRequired;
-    var out = std.array_list.Managed(u8).init(a);
+
+fn uri(allocator: Allocator, path: []const u8) ![]const u8 {
+    if (path.len == 0 or path[0] != '/') {
+        return error.AbsoluteWorkingDirectoryRequired;
+    }
+    var out = std.array_list.Managed(u8).init(allocator);
     try out.appendSlice("file://");
     const hex = "0123456789ABCDEF";
     for (path) |ch| {
-        if (std.ascii.isAlphanumeric(ch) or std.mem.indexOfScalar(u8, "/-_.~", ch) != null) try out.append(ch) else try out.appendSlice(&.{ '%', hex[ch >> 4], hex[ch & 15] });
+        if (std.ascii.isAlphanumeric(ch) or std.mem.indexOfScalar(u8, "/-_.~", ch) != null) {
+            try out.append(ch);
+        } else {
+            try out.appendSlice(&.{ '%', hex[ch >> 4], hex[ch & 15] });
+        }
     }
     return out.toOwnedSlice();
 }
-const Content = struct { model: []const V, view: []const V };
-const Pending = struct { source_id: []const u8, id: []const u8, name: []const u8, input: V, started: i64 };
-const Builder = struct {
-    a: A,
-    thread: C.Thread,
-    opts: C.ConvertOptions,
+
+const Content = struct {
+    model: []const Value,
+    view: []const Value,
+};
+const Pending = struct {
+    source_id: []const u8,
     id: []const u8,
-    rows: std.array_list.Managed(V),
-    warnings: C.Warnings,
-    active: std.array_list.Managed(V),
+    name: []const u8,
+    input: Value,
+    started: i64,
+};
+const Builder = struct {
+    allocator: Allocator,
+    thread: common.Thread,
+    opts: common.ConvertOptions,
+    id: []const u8,
+    rows: std.array_list.Managed(Value),
+    warnings: common.Warnings,
+    active: std.array_list.Managed(Value),
     active_starts: std.array_list.Managed(usize),
     pending: std.array_list.Managed(Pending),
     counter: usize = 0,
@@ -63,101 +81,225 @@ const Builder = struct {
 
     fn next(self: *Builder, label: []const u8) ![]const u8 {
         self.counter += 1;
-        return C.uuid5(self.a, namespace, try C.fmt(self.a, "{s}:{s}:{d}", .{ self.id, label, self.counter }));
+        return common.uuid5(
+            self.allocator,
+            namespace,
+            try common.fmt(self.allocator, "{s}:{s}:{d}", .{ self.id, label, self.counter }),
+        );
     }
-    fn add(self: *Builder, kind: []const u8, payload: V, timestamp: []const u8) !void {
-        try self.rows.append(try C.obj(self.a, &.{ .{ "timestamp", S(timestamp) }, .{ "type", S(kind) }, .{ "payload", payload } }));
+    fn add(self: *Builder, kind: []const u8, payload: Value, timestamp: []const u8) !void {
+        const row = try common.obj(self.allocator, &.{
+            .{ "timestamp", jsonString(timestamp) },
+            .{ "type", jsonString(kind) },
+            .{ "payload", payload },
+        });
+        try self.rows.append(row);
     }
-    fn response(self: *Builder, payload: V, timestamp: []const u8) !void {
+    fn response(self: *Builder, payload: Value, timestamp: []const u8) !void {
         try self.add("response_item", payload, timestamp);
         try self.active.append(payload);
     }
     fn begin(self: *Builder, timestamp: []const u8) anyerror!void {
-        if (self.turn != null) return;
-        if (self.active_starts.items.len == 0 or self.active_starts.items[self.active_starts.items.len - 1] != self.active.items.len)
+        if (self.turn != null) {
+            return;
+        }
+        const starts = self.active_starts.items;
+        if (starts.len == 0 or starts[starts.len - 1] != self.active.items.len) {
             try self.active_starts.append(self.active.items.len);
+        }
         self.turn = try self.next("turn");
         self.started = timestamp;
         self.last_answer = "";
-        try self.add("event_msg", try C.obj(self.a, &.{ .{ "type", S("task_started") }, .{ "turn_id", S(self.turn.?) }, .{ "started_at", N(try C.timestampMillis(timestamp)) }, .{ "model_context_window", .null }, .{ "collaboration_mode_kind", S("default") } }), timestamp);
+        try self.add(
+            "event_msg",
+            try common.obj(self.allocator, &.{
+                .{ "type", jsonString("task_started") },
+                .{ "turn_id", jsonString(self.turn.?) },
+                .{ "started_at", jsonInteger(try common.timestampMillis(timestamp)) },
+                .{ "model_context_window", .null },
+                .{ "collaboration_mode_kind", jsonString("default") },
+            }),
+            timestamp,
+        );
     }
-    fn display(self: *Builder, item: V, timestamp: []const u8) anyerror!void {
+    fn display(self: *Builder, item: Value, timestamp: []const u8) anyerror!void {
         try self.begin(timestamp);
-        const ms = try C.timestampMillis(timestamp);
-        try self.add("event_msg", try C.obj(self.a, &.{ .{ "type", S("item_completed") }, .{ "thread_id", S(self.id) }, .{ "turn_id", S(self.turn.?) }, .{ "item", item }, .{ "started_at_ms", N(ms) }, .{ "completed_at_ms", N(ms) } }), timestamp);
+        const ms = try common.timestampMillis(timestamp);
+        try self.add(
+            "event_msg",
+            try common.obj(self.allocator, &.{
+                .{ "type", jsonString("item_completed") },
+                .{ "thread_id", jsonString(self.id) },
+                .{ "turn_id", jsonString(self.turn.?) },
+                .{ "item", item },
+                .{ "started_at_ms", jsonInteger(ms) },
+                .{ "completed_at_ms", jsonInteger(ms) },
+            }),
+            timestamp,
+        );
     }
     fn complete(self: *Builder, timestamp: []const u8) anyerror!void {
-        if (self.turn == null) return;
+        if (self.turn == null) {
+            return;
+        }
         while (self.pending.items.len > 0) {
             const id = self.pending.items[0].source_id;
-            try self.output(id, S("This historical source tool call had no saved result. c2c did not execute it."), timestamp, false, true);
+            try self.output(
+                id,
+                jsonString("This historical source tool call had no saved result. c2c did not execute it."),
+                timestamp,
+                false,
+                true,
+            );
             try self.warnings.append("Incomplete historical tool call closed without execution");
         }
-        const start_ms = try C.timestampMillis(self.started);
-        const end_ms = try C.timestampMillis(timestamp);
-        try self.add("event_msg", try C.obj(self.a, &.{ .{ "type", S("task_complete") }, .{ "turn_id", S(self.turn.?) }, .{ "last_agent_message", if (self.last_answer.len > 0) S(self.last_answer) else .null }, .{ "started_at", N(start_ms) }, .{ "completed_at", N(end_ms) }, .{ "duration_ms", N(@max(0, end_ms - start_ms)) } }), timestamp);
+        const start_ms = try common.timestampMillis(self.started);
+        const end_ms = try common.timestampMillis(timestamp);
+        try self.add(
+            "event_msg",
+            try common.obj(self.allocator, &.{
+                .{ "type", jsonString("task_complete") },
+                .{ "turn_id", jsonString(self.turn.?) },
+                .{
+                    "last_agent_message",
+                    if (self.last_answer.len > 0) jsonString(self.last_answer) else .null,
+                },
+                .{ "started_at", jsonInteger(start_ms) },
+                .{ "completed_at", jsonInteger(end_ms) },
+                .{ "duration_ms", jsonInteger(@max(0, end_ms - start_ms)) },
+            }),
+            timestamp,
+        );
         self.turn = null;
     }
-    fn content(self: *Builder, input: []const V, role: []const u8) !Content {
-        var model = std.array_list.Managed(V).init(self.a);
-        var view = std.array_list.Managed(V).init(self.a);
-        const user = C.eq(role, "user");
+    fn content(self: *Builder, input: []const Value, role: []const u8) !Content {
+        var model = std.array_list.Managed(Value).init(self.allocator);
+        var view = std.array_list.Managed(Value).init(self.allocator);
+        const user = common.eq(role, "user");
         for (input) |block| {
-            if (is(block, "thinking") or is(block, "redacted_thinking") or is(block, "tool_use") or is(block, "tool_result")) continue;
+            if (is(block, "thinking") or is(block, "redacted_thinking") or
+                is(block, "tool_use") or is(block, "tool_result"))
+            {
+                continue;
+            }
             var text: []const u8 = "";
-            if (is(block, "text")) text = C.s(block, "text") else if (is(block, "image")) {
-                const source = C.get(block, "source");
-                var url = C.s(source, "url");
+            if (is(block, "text")) {
+                text = common.stringField(block, "text");
+            } else if (is(block, "image")) {
+                const source = common.get(block, "source");
+                var url = common.stringField(source, "url");
                 if (is(source, "base64") and self.opts.embed_images) {
-                    const encoded = C.s(source, "data");
-                    const mime = C.s(source, "media_type");
+                    const encoded = common.stringField(source, "data");
+                    const mime = common.stringField(source, "media_type");
                     const decoder = std.base64.standard.Decoder;
                     if (decoder.calcSizeForSlice(encoded)) |length| {
-                        const decoded = try self.a.alloc(u8, length);
+                        const decoded = try self.allocator.alloc(u8, length);
                         if (decoder.decode(decoded, encoded)) |_| {
-                            if (std.mem.startsWith(u8, mime, "image/")) url = try C.fmt(self.a, "data:{s};base64,{s}", .{ mime, encoded });
-                        } else |_| try self.warnings.append("Invalid Source image base64; preserved attachment metadata");
-                    } else |_| try self.warnings.append("Invalid Source image base64; preserved attachment metadata");
+                            if (std.mem.startsWith(u8, mime, "image/")) {
+                                url = try common.fmt(self.allocator, "data:{s};base64,{s}", .{ mime, encoded });
+                            }
+                        } else |_| {
+                            try self.warnings.append("Invalid Source image base64; preserved attachment metadata");
+                        }
+                    } else |_| {
+                        try self.warnings.append("Invalid Source image base64; preserved attachment metadata");
+                    }
                 }
                 if (url.len > 0 and user) {
-                    try model.append(try C.obj(self.a, &.{ .{ "type", S("input_image") }, .{ "image_url", S(url) } }));
-                    try view.append(try C.obj(self.a, &.{ .{ "type", S("image") }, .{ "image_url", S(url) } }));
+                    const model_image = try common.obj(self.allocator, &.{
+                        .{ "type", jsonString("input_image") },
+                        .{ "image_url", jsonString(url) },
+                    });
+                    try model.append(model_image);
+                    const visible_image = try common.obj(self.allocator, &.{
+                        .{ "type", jsonString("image") },
+                        .{ "image_url", jsonString(url) },
+                    });
+                    try view.append(visible_image);
                     continue;
                 }
-                text = if (is(source, "url")) try C.fmt(self.a, "[Source image attachment] {s}", .{url}) else if (!self.opts.embed_images) "[Source image attachment; bytes remain in the original transcript]" else "[Source image attachment]";
+                if (is(source, "url")) {
+                    text = try common.fmt(self.allocator, "[Source image attachment] {s}", .{url});
+                } else if (!self.opts.embed_images) {
+                    text = "[Source image attachment; bytes remain in the original transcript]";
+                } else {
+                    text = "[Source image attachment]";
+                }
             } else {
-                text = try C.fmt(self.a, "[Source attachment]\n{s}", .{try C.json(self.a, block)});
-                try self.warnings.append(try C.fmt(self.a, "Source content type '{s}' preserved as text", .{C.s(block, "type")}));
+                const attachment_json = try common.json(self.allocator, block);
+                text = try common.fmt(self.allocator, "[Source attachment]\n{s}", .{attachment_json});
+                try self.warnings.append(try common.fmt(
+                    self.allocator,
+                    "Source content type '{s}' preserved as text",
+                    .{common.stringField(block, "type")},
+                ));
             }
-            if (text.len == 0) continue;
-            try model.append(try C.obj(self.a, &.{ .{ "type", S(if (user) "input_text" else "output_text") }, .{ "text", S(text) } }));
-            var visible = try C.obj(self.a, &.{ .{ "type", S(if (user) "text" else "Text") }, .{ "text", S(text) } });
-            if (user) try C.set(self.a, &visible, "text_elements", try C.arr(self.a, &.{}));
+            if (text.len == 0) {
+                continue;
+            }
+            const model_text = try common.obj(self.allocator, &.{
+                .{ "type", jsonString(if (user) "input_text" else "output_text") },
+                .{ "text", jsonString(text) },
+            });
+            try model.append(model_text);
+            var visible = try common.obj(self.allocator, &.{
+                .{ "type", jsonString(if (user) "text" else "Text") },
+                .{ "text", jsonString(text) },
+            });
+            if (user) {
+                try common.set(self.allocator, &visible, "text_elements", try common.arr(self.allocator, &.{}));
+            }
             try view.append(visible);
         }
         return .{ .model = try model.toOwnedSlice(), .view = try view.toOwnedSlice() };
     }
-    fn textOf(self: *Builder, input: []const V, image_notice: bool) ![]const u8 {
-        var texts = std.array_list.Managed([]const u8).init(self.a);
+    fn textOf(self: *Builder, input: []const Value, image_notice: bool) ![]const u8 {
+        var texts = std.array_list.Managed([]const u8).init(self.allocator);
         for (input) |block| {
-            const text = C.s(block, "text");
-            if (text.len > 0) try texts.append(text) else if (image_notice) try texts.append("[Image attachment preserved in tool result]");
+            const text = common.stringField(block, "text");
+            if (text.len > 0) {
+                try texts.append(text);
+            } else if (image_notice) {
+                try texts.append("[Image attachment preserved in tool result]");
+            }
         }
-        return std.mem.join(self.a, "\n", texts.items);
+        return std.mem.join(self.allocator, "\n", texts.items);
     }
-    fn message(self: *Builder, role: []const u8, input: []const V, timestamp: []const u8, summary: bool) anyerror!void {
+    fn message(
+        self: *Builder,
+        role: []const u8,
+        input: []const Value,
+        timestamp: []const u8,
+        summary: bool,
+    ) anyerror!void {
         const parts = try self.content(input, role);
-        if (parts.model.len == 0) return;
+        if (parts.model.len == 0) {
+            return;
+        }
         const id = try self.next("message");
-        const user = C.eq(role, "user");
-        var payload = try C.obj(self.a, &.{ .{ "type", S("message") }, .{ "id", S(id) }, .{ "role", S(role) }, .{ "content", try C.arr(self.a, parts.model) } });
+        const user = common.eq(role, "user");
+        var payload = try common.obj(self.allocator, &.{
+            .{ "type", jsonString("message") },
+            .{ "id", jsonString(id) },
+            .{ "role", jsonString(role) },
+            .{ "content", try common.arr(self.allocator, parts.model) },
+        });
         if (!user) {
-            try C.set(self.a, &payload, "phase", S("final_answer"));
+            try common.set(self.allocator, &payload, "phase", jsonString("final_answer"));
             self.last_answer = try self.textOf(parts.model, false);
         }
         if (summary) {
             try self.complete(timestamp);
-            try self.add("compacted", try C.obj(self.a, &.{ .{ "message", S(try self.textOf(parts.model, false)) }, .{ "replacement_history", try C.arr(self.a, &.{payload}) }, .{ "compaction_response_id", .null }, .{ "latest_token_usage_record", .null } }), timestamp);
+            try self.add(
+                "compacted",
+                try common.obj(self.allocator, &.{
+                    .{ "message", jsonString(try self.textOf(parts.model, false)) },
+                    .{ "replacement_history", try common.arr(self.allocator, &.{payload}) },
+                    .{ "compaction_response_id", .null },
+                    .{ "latest_token_usage_record", .null },
+                }),
+                timestamp,
+            );
             self.active.clearRetainingCapacity();
             self.active_starts.clearRetainingCapacity();
             try self.active_starts.append(0);
@@ -166,65 +308,167 @@ const Builder = struct {
             try self.begin(timestamp);
             try self.response(payload, timestamp);
         }
-        var visible = try C.obj(self.a, &.{ .{ "type", S(if (user) "UserMessage" else "AgentMessage") }, .{ "id", S(id) }, .{ "content", try C.arr(self.a, parts.view) } });
-        if (!user) try C.set(self.a, &visible, "phase", S("final_answer"));
+        var visible = try common.obj(self.allocator, &.{
+            .{ "type", jsonString(if (user) "UserMessage" else "AgentMessage") },
+            .{ "id", jsonString(id) },
+            .{ "content", try common.arr(self.allocator, parts.view) },
+        });
+        if (!user) {
+            try common.set(self.allocator, &visible, "phase", jsonString("final_answer"));
+        }
         try self.display(visible, timestamp);
         self.messages += 1;
     }
-    fn output(self: *Builder, call_id: []const u8, raw: V, timestamp: []const u8, failed: bool, missing: bool) anyerror!void {
+    fn output(
+        self: *Builder,
+        call_id: []const u8,
+        raw: Value,
+        timestamp: []const u8,
+        failed: bool,
+        missing: bool,
+    ) anyerror!void {
         var index: ?usize = null;
-        for (self.pending.items, 0..) |p, i| if (C.eq(p.source_id, call_id)) {
-            index = i;
-            break;
-        };
+        for (self.pending.items, 0..) |pending, i| {
+            if (common.eq(pending.source_id, call_id)) {
+                index = i;
+                break;
+            }
+        }
         if (index == null) {
-            try self.message("assistant", try blocks(self.a, S(try C.fmt(self.a, "[Unpaired historical source tool result]\n{s}", .{try C.json(self.a, raw)}))), timestamp, false);
+            const artifact = try common.fmt(
+                self.allocator,
+                "[Unpaired historical source tool result]\n{s}",
+                .{try common.json(self.allocator, raw)},
+            );
+            try self.message(
+                "assistant",
+                try blocks(self.allocator, jsonString(artifact)),
+                timestamp,
+                false,
+            );
             try self.warnings.append("Unpaired source tool result preserved as a visible artifact");
             return;
         }
         const saved = self.pending.orderedRemove(index.?);
-        const parts = try self.content(try blocks(self.a, raw), "user");
-        var native_output = if (raw == .string) raw else try C.arr(self.a, parts.model);
+        const parts = try self.content(try blocks(self.allocator, raw), "user");
+        var native_output = if (raw == .string) raw else try common.arr(self.allocator, parts.model);
         if (failed) {
             const notice = "[The source marked this historical tool result as an error.]";
-            if (native_output == .string) native_output = S(try C.fmt(self.a, "{s}\n{s}", .{ notice, native_output.string })) else {
-                var augmented = std.array_list.Managed(V).init(self.a);
-                try augmented.append(try C.obj(self.a, &.{ .{ "type", S("input_text") }, .{ "text", S(notice) } }));
+            if (native_output == .string) {
+                const error_text = try common.fmt(self.allocator, "{s}\n{s}", .{ notice, native_output.string });
+                native_output = jsonString(error_text);
+            } else {
+                var augmented = std.array_list.Managed(Value).init(self.allocator);
+                const error_notice = try common.obj(self.allocator, &.{
+                    .{ "type", jsonString("input_text") },
+                    .{ "text", jsonString(notice) },
+                });
+                try augmented.append(error_notice);
                 try augmented.appendSlice(parts.model);
-                native_output = try C.arr(self.a, augmented.items);
+                native_output = try common.arr(self.allocator, augmented.items);
             }
         }
         const formatted = try self.textOf(parts.model, true);
-        try self.response(try C.obj(self.a, &.{ .{ "type", S("function_call_output") }, .{ "call_id", S(saved.id) }, .{ "output", native_output } }), timestamp);
-        const command = C.s(saved.input, "command");
-        if (C.eq(saved.name, "Bash") and command.len > 0) {
-            const elapsed = @max(0, (try C.timestampMillis(timestamp)) - saved.started);
-            try self.display(try C.obj(self.a, &.{ .{ "type", S("CommandExecution") }, .{ "id", S(saved.id) }, .{ "command", try C.arr(self.a, &.{ S("bash"), S("-lc"), S(command) }) }, .{ "cwd", S(try uri(self.a, self.thread.cwd)) }, .{ "parsed_cmd", try C.arr(self.a, &.{}) }, .{ "source", S("unified_exec_startup") }, .{ "status", S(if (failed or missing) "failed" else "completed") }, .{ "stdout", S(formatted) }, .{ "stderr", S("") }, .{ "aggregated_output", S(formatted) }, .{ "duration", try C.obj(self.a, &.{ .{ "secs", N(@divTrunc(elapsed, 1000)) }, .{ "nanos", N(@mod(elapsed, 1000) * 1_000_000) } }) }, .{ "formatted_output", S(formatted) } }), timestamp);
+        try self.response(
+            try common.obj(self.allocator, &.{
+                .{ "type", jsonString("function_call_output") },
+                .{ "call_id", jsonString(saved.id) },
+                .{ "output", native_output },
+            }),
+            timestamp,
+        );
+        const command = common.stringField(saved.input, "command");
+        if (common.eq(saved.name, "Bash") and command.len > 0) {
+            const elapsed = @max(0, (try common.timestampMillis(timestamp)) - saved.started);
+            try self.display(
+                try common.obj(self.allocator, &.{
+                    .{ "type", jsonString("CommandExecution") },
+                    .{ "id", jsonString(saved.id) },
+                    .{
+                        "command",
+                        try common.arr(self.allocator, &.{
+                            jsonString("bash"),
+                            jsonString("-lc"),
+                            jsonString(command),
+                        }),
+                    },
+                    .{ "cwd", jsonString(try uri(self.allocator, self.thread.cwd)) },
+                    .{ "parsed_cmd", try common.arr(self.allocator, &.{}) },
+                    .{ "source", jsonString("unified_exec_startup") },
+                    .{ "status", jsonString(if (failed or missing) "failed" else "completed") },
+                    .{ "stdout", jsonString(formatted) },
+                    .{ "stderr", jsonString("") },
+                    .{ "aggregated_output", jsonString(formatted) },
+                    .{
+                        "duration",
+                        try common.obj(self.allocator, &.{
+                            .{ "secs", jsonInteger(@divTrunc(elapsed, 1000)) },
+                            .{ "nanos", jsonInteger(@mod(elapsed, 1000) * 1_000_000) },
+                        }),
+                    },
+                    .{ "formatted_output", jsonString(formatted) },
+                }),
+                timestamp,
+            );
         } else {
-            const artifact = try C.fmt(self.a, "[Historical source tool: {s}]\nInput:\n{s}\nResult:\n{s}", .{ saved.name, try C.json(self.a, saved.input), formatted });
-            try self.display(try C.obj(self.a, &.{ .{ "type", S("AgentMessage") }, .{ "id", S(try self.next("tool-display")) }, .{ "content", try C.arr(self.a, &.{try C.obj(self.a, &.{ .{ "type", S("Text") }, .{ "text", S(artifact) } })}) }, .{ "phase", S("final_answer") } }), timestamp);
+            const artifact = try common.fmt(
+                self.allocator,
+                "[Historical source tool: {s}]\nInput:\n{s}\nResult:\n{s}",
+                .{ saved.name, try common.json(self.allocator, saved.input), formatted },
+            );
+            const display_id = try self.next("tool-display");
+            const display_text = try common.obj(self.allocator, &.{
+                .{ "type", jsonString("Text") },
+                .{ "text", jsonString(artifact) },
+            });
+            const display_content = try common.arr(self.allocator, &.{display_text});
+            try self.display(
+                try common.obj(self.allocator, &.{
+                    .{ "type", jsonString("AgentMessage") },
+                    .{ "id", jsonString(display_id) },
+                    .{ "content", display_content },
+                    .{ "phase", jsonString("final_answer") },
+                }),
+                timestamp,
+            );
         }
         self.tools += 1;
     }
-    fn excerpt(self: *Builder, item: V) !V {
-        if ((try C.json(self.a, item)).len <= 40_000) return item;
-        const text = try self.textOf(C.list(C.get(item, "content")), true);
+    fn excerpt(self: *Builder, item: Value) !Value {
+        if ((try common.json(self.allocator, item)).len <= 40_000) {
+            return item;
+        }
+        const text = try self.textOf(common.list(common.get(item, "content")), true);
         var shortened = text;
         if (text.len > 30_000) {
             var start: usize = 15_000;
             while (start > 0 and (text[start] & 0xc0) == 0x80) : (start -= 1) {}
             var end = text.len - 15_000;
             while (end < text.len and (text[end] & 0xc0) == 0x80) : (end += 1) {}
-            shortened = try C.fmt(self.a, "{s}\n[c2c: excerpt shortened; full text remains in the transcript.]\n{s}", .{ text[0..start], text[end..] });
+            shortened = try common.fmt(
+                self.allocator,
+                "{s}\n[c2c: excerpt shortened; full text remains in the transcript.]\n{s}",
+                .{ text[0..start], text[end..] },
+            );
         }
-        var bounded = try C.clone(self.a, item);
-        try C.set(self.a, &bounded, "content", try C.arr(self.a, &.{try C.obj(self.a, &.{ .{ "type", S(if (C.eq(C.s(item, "role"), "user")) "input_text" else "output_text") }, .{ "text", S(shortened) } })}));
+        var bounded = try common.clone(self.allocator, item);
+        const content_type = if (common.eq(common.stringField(item, "role"), "user")) "input_text" else "output_text";
+        const excerpt_text = try common.obj(self.allocator, &.{
+            .{ "type", jsonString(content_type) },
+            .{ "text", jsonString(shortened) },
+        });
+        const excerpt_content = try common.arr(self.allocator, &.{excerpt_text});
+        try common.set(self.allocator, &bounded, "content", excerpt_content);
         return bounded;
     }
     fn boundContext(self: *Builder, timestamp: []const u8) !void {
-        if ((try C.json(self.a, try C.arr(self.a, self.active.items))).len <= max_active_bytes) return;
+        const active_history = try common.arr(self.allocator, self.active.items);
+        const active_json = try common.json(self.allocator, active_history);
+        if (active_json.len <= max_active_bytes) {
+            return;
+        }
         const starts = self.active_starts;
-        var selected = std.array_list.Managed(V).init(self.a);
+        var selected = std.array_list.Managed(Value).init(self.allocator);
         var size: usize = 0;
         var end = self.active.items.len;
         var cursor = starts.items.len;
@@ -232,24 +476,37 @@ const Builder = struct {
             cursor -= 1;
             const start = starts.items[cursor];
             const group = self.active.items[start..end];
-            const length = (try C.json(self.a, try C.arr(self.a, group))).len;
+            const group_history = try common.arr(self.allocator, group);
+            const group_json = try common.json(self.allocator, group_history);
+            const length = group_json.len;
             if (size + length > recent_bytes) {
                 if (selected.items.len == 0) {
-                    var messages = std.array_list.Managed(V).init(self.a);
-                    for (group) |entry| if (is(entry, "message")) try messages.append(entry);
-                    const initial: ?V = if (messages.items.len > 0 and C.eq(C.s(messages.items[0], "role"), "user")) try self.excerpt(messages.items[0]) else null;
-                    size = if (initial) |v| (try C.json(self.a, v)).len else 0;
+                    var messages = std.array_list.Managed(Value).init(self.allocator);
+                    for (group) |entry| {
+                        if (is(entry, "message")) {
+                            try messages.append(entry);
+                        }
+                    }
+                    var initial: ?Value = null;
+                    if (messages.items.len > 0 and common.eq(common.stringField(messages.items[0], "role"), "user")) {
+                        initial = try self.excerpt(messages.items[0]);
+                    }
+                    size = if (initial) |v| (try common.json(self.allocator, v)).len else 0;
                     var n = messages.items.len;
                     const lower: usize = if (initial != null) 1 else 0;
                     while (n > lower) {
                         n -= 1;
                         const bounded = try self.excerpt(messages.items[n]);
-                        const bytes = (try C.json(self.a, bounded)).len;
-                        if (size + bytes > recent_bytes) break;
+                        const bytes = (try common.json(self.allocator, bounded)).len;
+                        if (size + bytes > recent_bytes) {
+                            break;
+                        }
                         try selected.insert(0, bounded);
                         size += bytes;
                     }
-                    if (initial) |v| try selected.insert(0, v);
+                    if (initial) |v| {
+                        try selected.insert(0, v);
+                    }
                 }
                 break;
             }
@@ -257,346 +514,197 @@ const Builder = struct {
             size += length;
             end = start;
         }
-        const notice = try C.fmt(self.a, "c2c restored a recent context window from this source conversation. Earlier messages and tool outputs remain in the full native transcript. This is an extractive window, not a semantic summary. Read the transcript when earlier decisions or exact details are needed.\nFull native transcript: {s}\nOriginal source transcript: {s}", .{ self.opts.transcript_path orelse "[the current session rollout]", self.thread.rollout_path });
-        const summary = try C.obj(self.a, &.{ .{ "type", S("message") }, .{ "role", S("user") }, .{ "content", try C.arr(self.a, &.{try C.obj(self.a, &.{ .{ "type", S("input_text") }, .{ "text", S(notice) } })}) } });
+        const notice = try common.fmt(
+            self.allocator,
+            "c2c restored a recent context window from this source conversation. " ++
+                "Earlier messages and tool outputs remain in the full native transcript. " ++
+                "This is an extractive window, not a semantic summary. " ++
+                "Read the transcript when earlier decisions or exact details are needed.\n" ++
+                "Full native transcript: {s}\nOriginal source transcript: {s}",
+            .{
+                self.opts.transcript_path orelse "[the current session rollout]",
+                self.thread.rollout_path,
+            },
+        );
+        const summary_text = try common.obj(self.allocator, &.{
+            .{ "type", jsonString("input_text") },
+            .{ "text", jsonString(notice) },
+        });
+        const summary_content = try common.arr(self.allocator, &.{summary_text});
+        const summary = try common.obj(self.allocator, &.{
+            .{ "type", jsonString("message") },
+            .{ "role", jsonString("user") },
+            .{ "content", summary_content },
+        });
         try selected.insert(0, summary);
-        try self.add("compacted", try C.obj(self.a, &.{ .{ "message", S(notice) }, .{ "replacement_history", try C.arr(self.a, selected.items) }, .{ "compaction_response_id", .null }, .{ "latest_token_usage_record", .null } }), timestamp);
+        try self.add(
+            "compacted",
+            try common.obj(self.allocator, &.{
+                .{ "message", jsonString(notice) },
+                .{ "replacement_history", try common.arr(self.allocator, selected.items) },
+                .{ "compaction_response_id", .null },
+                .{ "latest_token_usage_record", .null },
+            }),
+            timestamp,
+        );
         try self.warnings.append("Large source history retained in full; active context uses a labelled recent window");
     }
 };
 
-pub fn convert(a: A, thread: C.Thread, entries: []const V, opts: C.ConvertOptions) !C.Conversion {
+pub fn convert(
+    allocator: Allocator,
+    thread: common.Thread,
+    entries: []const Value,
+    opts: common.ConvertOptions,
+) !common.Conversion {
     const provider = opts.source_provider orelse "claude";
     const original_id = opts.source_session_id orelse thread.id;
-    if (!supportedProvider(provider)) return error.UnsupportedSourceProvider;
-    var self = Builder{ .a = a, .thread = thread, .opts = opts, .id = try C.sessionIdFor(a, "codex", provider, original_id), .rows = std.array_list.Managed(V).init(a), .warnings = C.Warnings.init(a), .active = std.array_list.Managed(V).init(a), .active_starts = std.array_list.Managed(usize).init(a), .pending = std.array_list.Managed(Pending).init(a), .started = thread.created_at };
-    var metadata = try C.obj(a, &.{ .{ "id", S(self.id) }, .{ "session_id", S(self.id) }, .{ "timestamp", S(thread.created_at) }, .{ "cwd", S(thread.cwd) }, .{ "originator", S("c2c") }, .{ "cli_version", S(format_version) }, .{ "source", S("cli") }, .{ "model_provider", S("openai") }, .{ "history_mode", S("legacy") }, .{ "base_instructions", .null } });
-    const codex_origin = if (C.eq(thread.origin_provider orelse "", "codex")) thread.origin_id else thread.original_codex_id;
+    if (!format.supportedProvider(provider)) {
+        return error.UnsupportedSourceProvider;
+    }
+    var self = Builder{
+        .allocator = allocator,
+        .thread = thread,
+        .opts = opts,
+        .id = try common.sessionIdFor(allocator, "codex", provider, original_id),
+        .rows = std.array_list.Managed(Value).init(allocator),
+        .warnings = common.Warnings.init(allocator),
+        .active = std.array_list.Managed(Value).init(allocator),
+        .active_starts = std.array_list.Managed(usize).init(allocator),
+        .pending = std.array_list.Managed(Pending).init(allocator),
+        .started = thread.created_at,
+    };
+    var metadata = try common.obj(allocator, &.{
+        .{ "id", jsonString(self.id) },
+        .{ "session_id", jsonString(self.id) },
+        .{ "timestamp", jsonString(thread.created_at) },
+        .{ "cwd", jsonString(thread.cwd) },
+        .{ "originator", jsonString("c2c") },
+        .{ "cli_version", jsonString(format_version) },
+        .{ "source", jsonString("cli") },
+        .{ "model_provider", jsonString("openai") },
+        .{ "history_mode", jsonString("legacy") },
+        .{ "base_instructions", .null },
+    });
+    const codex_origin = if (common.eq(thread.origin_provider orelse "", "codex"))
+        thread.origin_id
+    else
+        thread.original_codex_id;
     if (codex_origin) |original| {
-        if (!C.validUuid(original)) return error.InvalidOriginalCodexId;
-        try C.set(a, &metadata, "forked_from_id", S(original));
+        if (!common.validUuid(original)) {
+            return error.InvalidOriginalCodexId;
+        }
+        try common.set(allocator, &metadata, "forked_from_id", jsonString(original));
     }
     try self.add("session_meta", metadata, thread.created_at);
     var last_timestamp = thread.created_at;
     var summary_pending = false;
     for (entries) |entry| {
-        if (C.eq(C.s(entry, "subtype"), "compact_boundary")) {
+        if (common.eq(common.stringField(entry, "subtype"), "compact_boundary")) {
             try self.complete(last_timestamp);
             summary_pending = true;
             continue;
         }
-        const msg = C.get(entry, "message");
-        var role = C.s(msg, "role");
-        if (role.len == 0) role = C.s(entry, "type");
-        if (!C.eq(role, "user") and !C.eq(role, "assistant")) continue;
+        const msg = common.get(entry, "message");
+        var role = common.stringField(msg, "role");
+        if (role.len == 0) {
+            role = common.stringField(entry, "type");
+        }
+        if (!common.eq(role, "user") and !common.eq(role, "assistant")) {
+            continue;
+        }
         self.source_count += 1;
-        const ts = C.s(entry, "timestamp");
+        const ts = common.stringField(entry, "timestamp");
         const timestamp = if (ts.len > 0) ts else thread.updated_at;
-        _ = try C.timestampMillis(timestamp);
+        _ = try common.timestampMillis(timestamp);
         last_timestamp = timestamp;
-        const input = try blocks(a, C.get(msg, "content"));
-        var visible = std.array_list.Managed(V).init(a);
+        const input = try blocks(allocator, common.get(msg, "content"));
+        var visible = std.array_list.Managed(Value).init(allocator);
         var has_result = false;
         for (input) |block| {
-            if (is(block, "tool_result")) has_result = true;
-            if (!is(block, "tool_use") and !is(block, "tool_result") and !is(block, "thinking") and !is(block, "redacted_thinking")) try visible.append(block);
+            if (is(block, "tool_result")) {
+                has_result = true;
+            }
+            if (!is(block, "tool_use") and !is(block, "tool_result") and
+                !is(block, "thinking") and !is(block, "redacted_thinking"))
+            {
+                try visible.append(block);
+            }
         }
-        const summary = C.b(C.get(entry, "isCompactSummary")) or (summary_pending and C.eq(role, "user"));
+        const summary = common.boolValue(common.get(entry, "isCompactSummary")) or
+            (summary_pending and common.eq(role, "user"));
         if (visible.items.len > 0) {
-            if (C.eq(role, "user") and !summary and !has_result) try self.complete(timestamp);
+            if (common.eq(role, "user") and !summary and !has_result) {
+                try self.complete(timestamp);
+            }
             try self.message(role, visible.items, timestamp, summary);
             summary_pending = false;
         }
         for (input) |block| {
             if (is(block, "tool_use")) {
                 try self.begin(timestamp);
-                const provided_id = C.s(block, "id");
+                const provided_id = common.stringField(block, "id");
                 const source_id = if (provided_id.len > 0) provided_id else try self.next("missing-source-tool-id");
-                for (self.pending.items) |p| if (C.eq(p.source_id, source_id)) return error.DuplicatePendingToolId;
+                for (self.pending.items) |pending| {
+                    if (common.eq(pending.source_id, source_id)) {
+                        return error.DuplicatePendingToolId;
+                    }
+                }
                 const id = try self.next("call");
-                const given_name = C.s(block, "name");
+                const given_name = common.stringField(block, "name");
                 const name = if (given_name.len > 0) given_name else "historical_tool";
-                const given_input = C.get(block, "input");
-                const arguments = if (given_input != .null) given_input else try C.obj(a, &.{});
-                try self.pending.append(.{ .source_id = source_id, .id = id, .name = name, .input = arguments, .started = try C.timestampMillis(timestamp) });
-                try self.response(try C.obj(a, &.{ .{ "type", S("function_call") }, .{ "call_id", S(id) }, .{ "name", S(name) }, .{ "arguments", S(try C.json(a, arguments)) } }), timestamp);
-            } else if (is(block, "tool_result")) try self.output(C.s(block, "tool_use_id"), C.get(block, "content"), timestamp, C.b(C.get(block, "is_error")), false);
+                const given_input = common.get(block, "input");
+                const arguments = if (given_input != .null) given_input else try common.obj(allocator, &.{});
+                try self.pending.append(.{
+                    .source_id = source_id,
+                    .id = id,
+                    .name = name,
+                    .input = arguments,
+                    .started = try common.timestampMillis(timestamp),
+                });
+                try self.response(
+                    try common.obj(allocator, &.{
+                        .{ "type", jsonString("function_call") },
+                        .{ "call_id", jsonString(id) },
+                        .{ "name", jsonString(name) },
+                        .{ "arguments", jsonString(try common.json(allocator, arguments)) },
+                    }),
+                    timestamp,
+                );
+            } else if (is(block, "tool_result")) {
+                try self.output(
+                    common.stringField(block, "tool_use_id"),
+                    common.get(block, "content"),
+                    timestamp,
+                    common.boolValue(common.get(block, "is_error")),
+                    false,
+                );
+            }
         }
     }
     try self.complete(last_timestamp);
     try self.boundContext(last_timestamp);
     const encoder = std.base64.url_safe_no_pad.Encoder;
-    const encoded = try a.alloc(u8, encoder.calcSize(original_id.len));
+    const encoded = try allocator.alloc(u8, encoder.calcSize(original_id.len));
     _ = encoder.encode(encoded, original_id);
-    const digest = try fingerprint(a, self.rows.items);
-    try C.set(a, &metadata, "originator", S(try C.fmt(a, "c2c:{s}:{s}:{s}", .{ provider, encoded, digest })));
+    const digest = try format.fingerprint(allocator, self.rows.items);
+    try common.set(
+        allocator,
+        &metadata,
+        "originator",
+        jsonString(try common.fmt(allocator, "c2c:{s}:{s}:{s}", .{ provider, encoded, digest })),
+    );
     // Reassign the header to avoid a stale copy after map reallocation.
-    try C.set(a, &self.rows.items[0], "payload", metadata);
-    if ((try validate(a, self.rows.items)).len != 0) return error.InvalidCodexRollout;
-    return .{ .entries = try self.rows.toOwnedSlice(), .warnings = try self.warnings.toOwnedSlice(), .message_count = self.messages, .tool_count = self.tools, .source_item_count = self.source_count, .session_id = self.id };
-}
-
-pub fn validate(a: A, entries: []const V) ![][]const u8 {
-    var errors = C.Warnings.init(a);
-    if (entries.len == 0 or !is(entries[0], "session_meta")) {
-        try errors.append("First record must be session_meta");
-        return errors.toOwnedSlice();
+    try common.set(allocator, &self.rows.items[0], "payload", metadata);
+    if ((try validate(allocator, self.rows.items)).len != 0) {
+        return error.InvalidCodexRollout;
     }
-    const meta = C.get(entries[0], "payload");
-    const mode = C.s(meta, "history_mode");
-    if (!C.validUuid(C.s(meta, "id"))) try errors.append("Session ID is not a UUID");
-    if (!C.eq(mode, "legacy") and !C.eq(mode, "paginated")) try errors.append("Unknown native history mode");
-    var pending = std.StringHashMap(void).init(a);
-    var turn: ?[]const u8 = null;
-    for (entries) |row| {
-        _ = C.timestampMillis(C.s(row, "timestamp")) catch {
-            try errors.append("Invalid timestamp");
-            continue;
-        };
-        const payload = C.get(row, "payload");
-        if (is(row, "event_msg")) {
-            if (is(payload, "task_started")) {
-                if (turn != null) try errors.append("Overlapping turns");
-                turn = C.s(payload, "turn_id");
-            } else if (is(payload, "task_complete")) {
-                if (!C.eq(C.s(payload, "turn_id"), turn orelse "")) try errors.append("Mismatched turn completion");
-                turn = null;
-            } else if (is(payload, "item_completed")) {
-                if (!C.eq(C.s(payload, "turn_id"), turn orelse "") or !C.eq(C.s(payload, "thread_id"), C.s(meta, "id"))) try errors.append("Orphan visible item");
-            }
-        } else if (is(row, "response_item")) {
-            try validateResponse(payload, &pending, &errors);
-        } else if (is(row, "compacted")) {
-            if (pending.count() > 0) try errors.append("Compaction interrupts pending tool calls");
-            var replacement_pending = std.StringHashMap(void).init(a);
-            defer replacement_pending.deinit();
-            for (C.list(C.get(payload, "replacement_history"))) |item|
-                try validateResponse(item, &replacement_pending, &errors);
-            if (replacement_pending.count() > 0) try errors.append("Pending tool calls in compacted history");
-        }
-    }
-    if (pending.count() > 0) try errors.append("Pending tool calls");
-    if (turn != null) try errors.append("Unclosed turn");
-    return errors.toOwnedSlice();
-}
-fn validateResponse(payload: V, pending: *std.StringHashMap(void), errors: *C.Warnings) !void {
-    if (is(payload, "function_call")) {
-        const id = C.s(payload, "call_id");
-        if (id.len == 0) try errors.append("Missing tool call ID");
-        if (pending.contains(id)) try errors.append("Duplicate pending tool call");
-        try pending.put(id, {});
-    } else if (is(payload, "function_call_output")) {
-        if (!pending.remove(C.s(payload, "call_id"))) try errors.append("Unpaired tool result");
-    } else if (is(payload, "message") and !C.eq(C.s(payload, "role"), "user") and !C.eq(C.s(payload, "role"), "assistant")) {
-        try errors.append("Private instruction role in imported history");
-    }
-}
-
-fn sorted(a: A, value: V) !V {
-    if (value == .object) {
-        var keys = std.array_list.Managed([]const u8).init(a);
-        var it = value.object.iterator();
-        while (it.next()) |entry| try keys.append(entry.key_ptr.*);
-        std.mem.sort([]const u8, keys.items, {}, struct {
-            fn less(_: void, left: []const u8, right: []const u8) bool {
-                return std.mem.order(u8, left, right) == .lt;
-            }
-        }.less);
-        var out = try C.obj(a, &.{});
-        for (keys.items) |key| try C.set(a, &out, key, try sorted(a, value.object.get(key).?));
-        return out;
-    }
-    if (value == .array) {
-        var out = std.array_list.Managed(V).init(a);
-        for (value.array.items) |v| try out.append(try sorted(a, v));
-        return C.arr(a, out.items);
-    }
-    return value;
-}
-fn canonical(a: A, row: V, for_hash: bool) !V {
-    var value = try C.clone(a, row);
-    if (value != .object) return value;
-    _ = value.object.swapRemove("ordinal");
-    if (is(value, "session_meta")) {
-        var payload = C.get(value, "payload");
-        try C.set(a, &payload, "history_mode", S("legacy"));
-        if (C.get(payload, "base_instructions") == .null) try C.set(a, &payload, "base_instructions", .null);
-        if (for_hash) try C.set(a, &payload, "originator", S("c2c"));
-        try C.set(a, &value, "payload", payload);
-    }
-    return sorted(a, value);
-}
-fn fingerprint(a: A, entries: []const V) ![]const u8 {
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
-    for (entries) |row| {
-        hash.update(try C.json(a, try canonical(a, row, true)));
-        hash.update("\n");
-    }
-    var digest: [32]u8 = undefined;
-    hash.final(&digest);
-    const hex = std.fmt.bytesToHex(digest, .lower);
-    return a.dupe(u8, &hex);
-}
-pub fn registrationMatches(a: A, staged: []const V, target: []const V) !bool {
-    if (staged.len != target.len) return false;
-    for (staged, target) |before, after| if (!C.eq(try C.json(a, try canonical(a, before, false)), try C.json(a, try canonical(a, after, false)))) return false;
-    return true;
-}
-fn supportedProvider(provider: []const u8) bool {
-    return C.eq(provider, "claude") or C.eq(provider, "opencode") or C.eq(provider, "omp") or C.eq(provider, "codex");
-}
-pub const Origin = struct { provider: ?[]const u8 = null, original_id: ?[]const u8 = null, unchanged: bool = false };
-pub fn readOrigin(a: A, thread: C.Thread) !Origin {
-    var reader = C.LineReader.open(a, thread.rollout_path) catch return .{};
-    defer reader.close();
-    const first_line = (try reader.next()) orelse return .{};
-    const first = C.parse(a, first_line) catch return .{};
-    const originator = C.s(C.get(first, "payload"), "originator");
-    const prefix = "c2c:";
-    if (!std.mem.startsWith(u8, originator, prefix)) return .{};
-    const suffix = originator[prefix.len..];
-    const provider_end = std.mem.indexOfScalar(u8, suffix, ':') orelse return .{};
-    const provider = suffix[0..provider_end];
-    if (!supportedProvider(provider)) return .{};
-    const marker = suffix[provider_end + 1 ..];
-    const split = std.mem.indexOfScalar(u8, marker, ':') orelse return .{};
-    const encoded = marker[0..split];
-    const decoder = std.base64.url_safe_no_pad.Decoder;
-    const size = decoder.calcSizeForSlice(encoded) catch return .{};
-    const original = try a.alloc(u8, size);
-    decoder.decode(original, encoded) catch return .{};
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
-    hash.update(try C.json(a, try canonical(a, first, true)));
-    hash.update("\n");
-    while (try reader.next()) |line| {
-        if (std.mem.trim(u8, line, " \t\r\n").len == 0) continue;
-        var arena = std.heap.ArenaAllocator.init(a);
-        defer arena.deinit();
-        const temp = arena.allocator();
-        const value = C.parse(temp, line) catch return .{ .provider = provider, .original_id = original, .unchanged = false };
-        hash.update(try C.json(temp, try canonical(temp, value, true)));
-        hash.update("\n");
-    }
-    var digest: [32]u8 = undefined;
-    hash.final(&digest);
-    const hex = std.fmt.bytesToHex(digest, .lower);
-    return .{ .provider = provider, .original_id = original, .unchanged = C.eq(&hex, marker[split + 1 ..]) };
-}
-
-fn fixtureThread() C.Thread {
-    return .{ .id = "claude-session", .title = "Synthetic", .cwd = "/tmp/project", .created_at = "2026-01-02T03:04:05.000Z", .updated_at = "2026-01-02T03:05:00.000Z", .rollout_path = "/tmp/claude.jsonl" };
-}
-fn fixtureEntry(a: A, role: []const u8, content: V) !V {
-    return C.obj(a, &.{ .{ "type", S(role) }, .{ "timestamp", S("2026-01-02T03:04:06.000Z") }, .{ "message", try C.obj(a, &.{ .{ "role", S(role) }, .{ "content", content } }) } });
-}
-test "Codex has model records visible records and deterministic IDs" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const entries = &.{ try fixtureEntry(a, "user", S("Question")), try fixtureEntry(a, "assistant", S("Answer")) };
-    const result = try convert(a, fixtureThread(), entries, .{});
-    try std.testing.expectEqual(@as(usize, 2), result.message_count);
-    try std.testing.expectEqual(@as(usize, 7), result.entries.len);
-    try std.testing.expectEqual(@as(usize, 0), (try validate(a, result.entries)).len);
-    try std.testing.expectEqualStrings(try sessionId(a, "claude-session"), result.session_id);
-    try std.testing.expect(std.mem.indexOf(u8, try targetPath(a, fixtureThread(), "/tmp/codex"), "/sessions/2026/01/02/") != null);
-    const migrated = try a.alloc(V, result.entries.len);
-    for (result.entries, 0..) |row, i| {
-        migrated[i] = try C.clone(a, row);
-        try C.set(a, &migrated[i], "ordinal", N(@intCast(i)));
-    }
-    var meta = C.get(migrated[0], "payload");
-    try C.set(a, &meta, "history_mode", S("paginated"));
-    try C.set(a, &migrated[0], "payload", meta);
-    try std.testing.expect(try registrationMatches(a, result.entries, migrated));
-    try std.testing.expectEqualStrings(try fingerprint(a, result.entries), try fingerprint(a, migrated));
-}
-test "Bash history uses file URI and paired completed native tool records" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const call = try C.parse(a, "[{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"Bash\",\"input\":{\"command\":\"pwd\"}}]");
-    const output = try C.parse(a, "[{\"type\":\"tool_result\",\"tool_use_id\":\"a\",\"content\":\"/tmp/project\"}]");
-    const result = try convert(a, fixtureThread(), &.{ try fixtureEntry(a, "user", S("Run")), try fixtureEntry(a, "assistant", call), try fixtureEntry(a, "user", output), try fixtureEntry(a, "assistant", S("Done")) }, .{});
-    try std.testing.expectEqual(@as(usize, 1), result.tool_count);
-    var command_seen = false;
-    for (result.entries) |row| {
-        const item = C.get(C.get(row, "payload"), "item");
-        if (is(item, "CommandExecution")) {
-            command_seen = true;
-            try std.testing.expectEqualStrings("file:///tmp/project", C.s(item, "cwd"));
-            try std.testing.expectEqualStrings("/tmp/project", C.s(item, "aggregated_output"));
-            try std.testing.expect(C.get(item, "exit_code") == .null);
-        }
-    }
-    try std.testing.expect(command_seen);
-    try std.testing.expectEqual(@as(usize, 0), result.warnings.len);
-}
-test "large single turn preserves request newest answer and total context budget" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var entries = std.array_list.Managed(V).init(a);
-    try entries.append(try fixtureEntry(a, "user", S("Original request")));
-    const huge = try a.alloc(u8, 100_000);
-    @memset(huge, 'x');
-    for (0..20) |_| try entries.append(try fixtureEntry(a, "assistant", S(huge)));
-    try entries.append(try fixtureEntry(a, "assistant", S("Newest final answer")));
-    const result = try convert(a, fixtureThread(), entries.items, .{ .transcript_path = "/native/transcript.jsonl" });
-    const last = result.entries[result.entries.len - 1];
-    try std.testing.expect(is(last, "compacted"));
-    const active_json = try C.json(a, C.get(C.get(last, "payload"), "replacement_history"));
-    try std.testing.expect(active_json.len < max_active_bytes);
-    try std.testing.expect(std.mem.indexOf(u8, active_json, "Original request") != null);
-    try std.testing.expect(std.mem.indexOf(u8, active_json, "Newest final answer") != null);
-    try std.testing.expect(std.mem.indexOf(u8, active_json, "excerpt shortened") != null);
-    try std.testing.expectEqual(@as(usize, 22), result.message_count);
-}
-test "private thinking excluded and tool images use input_image" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const call = try C.parse(a, "[{\"type\":\"thinking\",\"thinking\":\"PRIVATE-THOUGHT\"},{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"Read\",\"input\":{\"file_path\":\"/pic.png\"}}]");
-    const output = try C.parse(a, "[{\"type\":\"tool_result\",\"tool_use_id\":\"a\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"ZmFrZQ==\"}}]}]");
-    const result = try convert(a, fixtureThread(), &.{ try fixtureEntry(a, "user", S("See image")), try fixtureEntry(a, "assistant", call), try fixtureEntry(a, "user", output) }, .{});
-    var saw_image = false;
-    for (result.entries) |row| {
-        const payload = C.get(row, "payload");
-        if (is(payload, "function_call_output")) {
-            const parts = C.list(C.get(payload, "output"));
-            saw_image = parts.len == 1 and is(parts[0], "input_image");
-        }
-    }
-    try std.testing.expect(saw_image);
-    try std.testing.expect(std.mem.indexOf(u8, try C.json(a, try C.arr(a, result.entries)), "PRIVATE-THOUGHT") == null);
-}
-
-test "provider identities and provenance are explicit" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const entries = &.{try fixtureEntry(a, "user", S("Question"))};
-    var previous: ?[]const u8 = null;
-    for ([_][]const u8{ "claude", "omp", "opencode" }) |provider| {
-        const result = try convert(a, fixtureThread(), entries, .{ .source_provider = provider });
-        try std.testing.expectEqualStrings(try C.sessionIdFor(a, "codex", provider, fixtureThread().id), result.session_id);
-        if (previous) |id| try std.testing.expect(!C.eq(id, result.session_id));
-        previous = result.session_id;
-        const originator = C.s(C.get(result.entries[0], "payload"), "originator");
-        try std.testing.expect(std.mem.startsWith(u8, originator, try C.fmt(a, "c2c:{s}:", .{provider})));
-        try std.testing.expect(std.mem.indexOf(u8, try targetPathFor(a, fixtureThread(), "/tmp/codex", provider), result.session_id) != null);
-    }
-}
-test "compacted replacement history rejects orphan tool results" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const result = try convert(a, fixtureThread(), &.{try fixtureEntry(a, "user", S("Question"))}, .{});
-    var entries = std.array_list.Managed(V).init(a);
-    try entries.appendSlice(result.entries);
-    const result_item = try C.obj(a, &.{ .{ "type", S("function_call_output") }, .{ "call_id", S("orphan") }, .{ "output", S("content") } });
-    try entries.append(try C.obj(a, &.{ .{ "type", S("compacted") }, .{ "timestamp", S(fixtureThread().updated_at) }, .{ "payload", try C.obj(a, &.{.{ "replacement_history", try C.arr(a, &.{result_item}) }}) } }));
-    const errors = try validate(a, entries.items);
-    try std.testing.expectEqual(@as(usize, 1), errors.len);
-    try std.testing.expectEqualStrings("Unpaired tool result", errors[0]);
+    return .{
+        .entries = try self.rows.toOwnedSlice(),
+        .warnings = try self.warnings.toOwnedSlice(),
+        .message_count = self.messages,
+        .tool_count = self.tools,
+        .source_item_count = self.source_count,
+        .session_id = self.id,
+    };
 }

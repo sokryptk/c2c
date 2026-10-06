@@ -18,4 +18,5 @@ pub const unregister = native.unregister;
 test {
     _ = codec;
     _ = native;
+    _ = @import("opencode/test.zig");
 }

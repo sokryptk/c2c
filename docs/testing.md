@@ -3,6 +3,10 @@
 Run commands from the repository root. Python harnesses require Python 3.11 or
 newer; Zig process tests require `python3` on `PATH`.
 
+Check formatting with `zig fmt --check zig build.zig` and
+`ruff format --check tests`. Python formatting uses Ruff 0.16.10, configured in
+`pyproject.toml`.
+
 ```sh
 zig build test
 zig build -Doptimize=ReleaseSafe

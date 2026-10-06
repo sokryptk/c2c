@@ -4,14 +4,17 @@ const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
 
 pub fn main(init: std.process.Init) !void {
-    const a = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(a);
-    const exit_code = cli.run(a, args[1..]) catch |err| blk: {
-        const message = try common.fmt(a, "c2c: {s}\n  {s}\n", .{ @errorName(err), diagnostics.reason(@errorName(err)) });
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    const exit_code = cli.run(allocator, args[1..]) catch |err| blk: {
+        const code = @errorName(err);
+        const message = try common.fmt(allocator, "c2c: {s}\n  {s}\n", .{ code, diagnostics.reason(code) });
         _ = common.c.write(2, message.ptr, message.len);
         break :blk @as(u8, 1);
     };
-    if (exit_code != 0) std.process.exit(exit_code);
+    if (exit_code != 0) {
+        std.process.exit(exit_code);
+    }
 }
 
 test {

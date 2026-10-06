@@ -50,13 +50,36 @@ class _MessagesHandler(BaseHTTPRequestHandler):
             return
         events = [
             ("message_start", {"type": "message_start", "message": message}),
-            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": REPLY}}),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": REPLY},
+                },
+            ),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}}),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 9},
+                },
+            ),
             ("message_stop", {"type": "message_stop"}),
         ]
-        body = "".join(f"event: {event}\ndata: {json.dumps(data)}\n\n" for event, data in events).encode()
+        body = "".join(
+            f"event: {event}\ndata: {json.dumps(data)}\n\n" for event, data in events
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(body)))
@@ -72,7 +95,10 @@ class _MessagesHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-@unittest.skipUnless(os.environ.get("RUN_CLAUDE_INTEGRATION") == "1", "set RUN_CLAUDE_INTEGRATION=1 for the offline native CLI test")
+@unittest.skipUnless(
+    os.environ.get("RUN_CLAUDE_INTEGRATION") == "1",
+    "set RUN_CLAUDE_INTEGRATION=1 for the offline native CLI test",
+)
 class ClaudeNativeResumeTests(unittest.TestCase):
     def setUp(self):
         self.binary = os.environ.get("CLAUDE_BINARY") or shutil.which("claude")
@@ -100,8 +126,11 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         message = {"role": role, "content": [{"type": "text", "text": text}]}
         if role == "assistant":
             message.update(
-                model="<synthetic>", id="msg_import_" + uuid.uuid4().hex,
-                type="message", stop_reason="end_turn", stop_sequence=None,
+                model="<synthetic>",
+                id="msg_import_" + uuid.uuid4().hex,
+                type="message",
+                stop_reason="end_turn",
+                stop_sequence=None,
                 usage={"input_tokens": 0, "output_tokens": 0},
             )
         entry = self.common(identifier)
@@ -114,10 +143,14 @@ class ClaudeNativeResumeTests(unittest.TestCase):
 
     def common(self, identifier):
         return {
-            "uuid": identifier, "parentUuid": self.parent,
-            "sessionId": self.sid, "isSidechain": False,
-            "userType": "external", "entrypoint": "cli",
-            "cwd": str(self.project), "version": "2.1.289",
+            "uuid": identifier,
+            "parentUuid": self.parent,
+            "sessionId": self.sid,
+            "isSidechain": False,
+            "userType": "external",
+            "entrypoint": "cli",
+            "cwd": str(self.project),
+            "version": "2.1.289",
             "timestamp": "2026-10-06T00:00:00.000Z",
         }
 
@@ -125,40 +158,87 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         directory = self.config / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(self.project))
         directory.mkdir(parents=True)
         path = directory / f"{self.sid}.jsonl"
-        title = {"type": "custom-title", "sessionId": self.sid, "customTitle": "Offline Codex migration fixture"}
-        entries = self.entries if any(e.get("type") == "custom-title" for e in self.entries) else [*self.entries, title]
+        title = {
+            "type": "custom-title",
+            "sessionId": self.sid,
+            "customTitle": "Offline Codex migration fixture",
+        }
+        entries = (
+            self.entries
+            if any(e.get("type") == "custom-title" for e in self.entries)
+            else [*self.entries, title]
+        )
         path.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries))
         return path
 
     def environment(self):
-        env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT") if key in os.environ}
+        env = {
+            key: os.environ[key]
+            for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
+            if key in os.environ
+        }
         env.update(
             CLAUDE_CONFIG_DIR=str(self.config),
             ANTHROPIC_BASE_URL=f"http://127.0.0.1:{self.server.server_port}",
             ANTHROPIC_API_KEY="sk-ant-offline-test-not-a-real-key",
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
-            DISABLE_TELEMETRY="1", DISABLE_ERROR_REPORTING="1",
-            DISABLE_AUTOUPDATER="1", DISABLE_UPDATES="1",
+            DISABLE_TELEMETRY="1",
+            DISABLE_ERROR_REPORTING="1",
+            DISABLE_AUTOUPDATER="1",
+            DISABLE_UPDATES="1",
             CLAUDE_CODE_DISABLE_AUTO_MEMORY="1",
-            NO_PROXY="127.0.0.1,localhost", TERM="dumb",
+            NO_PROXY="127.0.0.1,localhost",
+            TERM="dumb",
         )
         return env
 
     def resume(self):
         self.write_transcript()
         command = [
-            self.binary, "--bare", "--safe-mode", "--print", "--resume", self.sid,
-            "--model", "claude-sonnet-4-6", "--tools", "",
-            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-            "--setting-sources", "", "--settings", '{"disableAllHooks":true}',
-            "--permission-mode", "dontAsk", "--permission-prompts", "none",
-            "--system-prompt", "This is a local migration compatibility test.",
-            "--output-format", "json", "Continue the synthetic fixture.",
+            self.binary,
+            "--bare",
+            "--safe-mode",
+            "--print",
+            "--resume",
+            self.sid,
+            "--model",
+            "claude-sonnet-4-6",
+            "--tools",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--setting-sources",
+            "",
+            "--settings",
+            '{"disableAllHooks":true}',
+            "--permission-mode",
+            "dontAsk",
+            "--permission-prompts",
+            "none",
+            "--system-prompt",
+            "This is a local migration compatibility test.",
+            "--output-format",
+            "json",
+            "Continue the synthetic fixture.",
         ]
-        completed = subprocess.run(command, cwd=self.project, env=self.environment(), text=True, capture_output=True, timeout=45)
-        self.assertEqual(completed.returncode, 0, completed.stdout[-5000:] + completed.stderr[-5000:])
+        completed = subprocess.run(
+            command,
+            cwd=self.project,
+            env=self.environment(),
+            text=True,
+            capture_output=True,
+            timeout=45,
+        )
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout[-5000:] + completed.stderr[-5000:]
+        )
         self.assertIn(REPLY, completed.stdout)
-        requests = [data for path, data in self.server.requests if path.startswith("/v1/messages") and not path.startswith("/v1/messages/count_tokens")]
+        requests = [
+            data
+            for path, data in self.server.requests
+            if path.startswith("/v1/messages") and not path.startswith("/v1/messages/count_tokens")
+        ]
         self.assertTrue(requests, completed.stdout + completed.stderr)
         return requests[-1]
 
@@ -177,7 +257,9 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         try:
             from claude_agent_sdk import get_session_messages, list_sessions
         except ImportError:
-            self.skipTest("install claude-agent-sdk in an isolated environment for SDK reader verification")
+            self.skipTest(
+                "install claude-agent-sdk in an isolated environment for SDK reader verification"
+            )
         self.add_message("user", "Discover this imported fixture.")
         self.add_message("assistant", "The native message chain is preserved.")
         self.write_transcript()
@@ -189,36 +271,78 @@ class ClaudeNativeResumeTests(unittest.TestCase):
             self.assertEqual(sessions[0].cwd, str(self.project))
             messages = get_session_messages(self.sid, directory=str(self.project))
         self.assertEqual([m.type for m in messages], ["user", "assistant"])
-        self.assertEqual(messages[-1].message["content"][0]["text"], "The native message chain is preserved.")
+        self.assertEqual(
+            messages[-1].message["content"][0]["text"], "The native message chain is preserved."
+        )
 
     def test_actual_converter_preserves_completed_native_and_unknown_tools(self):
         from codex_to_claude.native import convert
         from codex_to_claude.source import Item, Thread
 
         timestamp = "2026-10-06T00:00:00.000Z"
-        thread = Thread(id=str(uuid.uuid4()), title="Tool migration fixture",
-                        cwd=str(self.project), created_at=timestamp,
-                        updated_at=timestamp, rollout_path=self.root / "synthetic.jsonl")
+        thread = Thread(
+            id=str(uuid.uuid4()),
+            title="Tool migration fixture",
+            cwd=str(self.project),
+            created_at=timestamp,
+            updated_at=timestamp,
+            rollout_path=self.root / "synthetic.jsonl",
+        )
         items = [
             Item("u1", "user", "Inspect the synthetic historical tools.", timestamp, "userMessage"),
-            Item("t1", "assistant", "", timestamp, "commandExecution", raw={
-                "command": "printf synthetic-migration-output", "aggregatedOutput": "synthetic-migration-output",
-                "status": "completed", "exitCode": 0}),
-            Item("t2", "assistant", "", timestamp, "mcpToolCall", raw={
-                "server": "historical_fixture", "tool": "lookup", "arguments": {"value": "fixture"},
-                "result": {"text": "historical-mcp-result"}, "status": "completed"}),
-            Item("a1", "assistant", "All fixture tools have already finished.", timestamp, "agentMessage"),
+            Item(
+                "t1",
+                "assistant",
+                "",
+                timestamp,
+                "commandExecution",
+                raw={
+                    "command": "printf synthetic-migration-output",
+                    "aggregatedOutput": "synthetic-migration-output",
+                    "status": "completed",
+                    "exitCode": 0,
+                },
+            ),
+            Item(
+                "t2",
+                "assistant",
+                "",
+                timestamp,
+                "mcpToolCall",
+                raw={
+                    "server": "historical_fixture",
+                    "tool": "lookup",
+                    "arguments": {"value": "fixture"},
+                    "result": {"text": "historical-mcp-result"},
+                    "status": "completed",
+                },
+            ),
+            Item(
+                "a1",
+                "assistant",
+                "All fixture tools have already finished.",
+                timestamp,
+                "agentMessage",
+            ),
         ]
         result = convert(thread, items)
         self.entries = result.entries
         self.sid = result.session_id
         request = self.resume()
-        blocks = [block for message in request["messages"]
-                  for block in message["content"] if isinstance(block, dict)]
+        blocks = [
+            block
+            for message in request["messages"]
+            for block in message["content"]
+            if isinstance(block, dict)
+        ]
         tool_uses = [block for block in blocks if block["type"] == "tool_use"]
         tool_results = [block for block in blocks if block["type"] == "tool_result"]
-        self.assertEqual([block["name"] for block in tool_uses], ["Bash", "mcp__historical_fixture__lookup"])
-        self.assertEqual({block["id"] for block in tool_uses}, {block["tool_use_id"] for block in tool_results})
+        self.assertEqual(
+            [block["name"] for block in tool_uses], ["Bash", "mcp__historical_fixture__lookup"]
+        )
+        self.assertEqual(
+            {block["id"] for block in tool_uses}, {block["tool_use_id"] for block in tool_results}
+        )
         self.assertIn("historical-mcp-result", json.dumps(tool_results))
         self.assertIn("synthetic-migration-output", json.dumps(tool_results))
         self.assertEqual(request.get("tools", []), [])
@@ -228,26 +352,76 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         from codex_to_claude.source import Item, Thread
 
         timestamp = "2026-10-06T00:00:00.000Z"
-        thread = Thread(id=str(uuid.uuid4()), title="Oversized migration fixture",
-                        cwd=str(self.project), created_at=timestamp, updated_at=timestamp,
-                        rollout_path=self.root / "synthetic.jsonl")
-        huge = "archived-only-fixture-start\n" + ("large-synthetic-output " * 40000) + "\narchived-fixture-end"
-        result = convert(thread, [
-            Item("u1", "user", "Keep the original archive available.", timestamp, "userMessage", ordinal=0),
-            Item("t1", "assistant", "", timestamp, "commandExecution", ordinal=1, raw={
-                "command": "echo synthetic-only", "aggregatedOutput": huge,
-                "exitCode": 0, "status": "completed"}),
-            Item("u2", "user", "The next task is the bluebird fixture.", timestamp, "userMessage", ordinal=2),
-            Item("a1", "assistant", "I will continue the bluebird task.", timestamp, "agentMessage", ordinal=3),
-        ], transcript_path=str(self.root / "full-native-history.jsonl"))
+        thread = Thread(
+            id=str(uuid.uuid4()),
+            title="Oversized migration fixture",
+            cwd=str(self.project),
+            created_at=timestamp,
+            updated_at=timestamp,
+            rollout_path=self.root / "synthetic.jsonl",
+        )
+        huge = (
+            "archived-only-fixture-start\n"
+            + ("large-synthetic-output " * 40000)
+            + "\narchived-fixture-end"
+        )
+        result = convert(
+            thread,
+            [
+                Item(
+                    "u1",
+                    "user",
+                    "Keep the original archive available.",
+                    timestamp,
+                    "userMessage",
+                    ordinal=0,
+                ),
+                Item(
+                    "t1",
+                    "assistant",
+                    "",
+                    timestamp,
+                    "commandExecution",
+                    ordinal=1,
+                    raw={
+                        "command": "echo synthetic-only",
+                        "aggregatedOutput": huge,
+                        "exitCode": 0,
+                        "status": "completed",
+                    },
+                ),
+                Item(
+                    "u2",
+                    "user",
+                    "The next task is the bluebird fixture.",
+                    timestamp,
+                    "userMessage",
+                    ordinal=2,
+                ),
+                Item(
+                    "a1",
+                    "assistant",
+                    "I will continue the bluebird task.",
+                    timestamp,
+                    "agentMessage",
+                    ordinal=3,
+                ),
+            ],
+            transcript_path=str(self.root / "full-native-history.jsonl"),
+        )
         self.entries = result.entries
         self.sid = result.session_id
         self.assertIn(huge, json.dumps(result.entries).replace("\\n", "\n"))
         self.assertTrue(any("bounded continuation" in warning for warning in result.warnings))
         request = self.resume()
-        requests = [data for path, data in self.server.requests if path.startswith("/v1/messages")
-                    and not path.startswith("/v1/messages/count_tokens")]
-        self.assertEqual(len(requests), 1, "Importer must avoid a first oversized model compaction request")
+        requests = [
+            data
+            for path, data in self.server.requests
+            if path.startswith("/v1/messages") and not path.startswith("/v1/messages/count_tokens")
+        ]
+        self.assertEqual(
+            len(requests), 1, "Importer must avoid a first oversized model compaction request"
+        )
         outbound = json.dumps(request["messages"])
         self.assertLess(len(outbound.encode()), MAX_ACTIVE_BYTES)
         self.assertIn("bluebird", outbound)
@@ -262,27 +436,60 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         from codex_to_claude.source import Item, Thread
 
         timestamp = "2026-10-06T00:00:00.000Z"
-        thread = Thread(id=str(uuid.uuid4()), title="Picker migration fixture",
-                        cwd=str(self.project), created_at=timestamp, updated_at=timestamp,
-                        rollout_path=self.root / "synthetic.jsonl")
-        result = convert(thread, [
-            Item("u1", "user", "Inspect this imported picker fixture.", timestamp, "userMessage"),
-            Item("a1", "assistant", "Synthetic imported answer.", timestamp, "agentMessage"),
-        ])
+        thread = Thread(
+            id=str(uuid.uuid4()),
+            title="Picker migration fixture",
+            cwd=str(self.project),
+            created_at=timestamp,
+            updated_at=timestamp,
+            rollout_path=self.root / "synthetic.jsonl",
+        )
+        result = convert(
+            thread,
+            [
+                Item(
+                    "u1", "user", "Inspect this imported picker fixture.", timestamp, "userMessage"
+                ),
+                Item("a1", "assistant", "Synthetic imported answer.", timestamp, "agentMessage"),
+            ],
+        )
         self.entries = result.entries
         self.sid = result.session_id
         self.write_transcript()
-        (self.config / ".claude.json").write_text(json.dumps({
-            "hasCompletedOnboarding": True, "theme": "dark",
-            "projects": {str(self.project): {"hasTrustDialogAccepted": True}},
-        }))
+        (self.config / ".claude.json").write_text(
+            json.dumps(
+                {
+                    "hasCompletedOnboarding": True,
+                    "theme": "dark",
+                    "projects": {str(self.project): {"hasTrustDialogAccepted": True}},
+                }
+            )
+        )
         master, slave = pty.openpty()
-        process = subprocess.Popen([
-            self.binary, "--bare", "--safe-mode", "--resume", "--tools", "",
-            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-            "--setting-sources", "", "--permission-mode", "dontAsk",
-            "--model", "claude-sonnet-4-6",
-        ], cwd=self.project, env=self.environment(), stdin=slave, stdout=slave, stderr=slave)
+        process = subprocess.Popen(
+            [
+                self.binary,
+                "--bare",
+                "--safe-mode",
+                "--resume",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "--setting-sources",
+                "",
+                "--permission-mode",
+                "dontAsk",
+                "--model",
+                "claude-sonnet-4-6",
+            ],
+            cwd=self.project,
+            env=self.environment(),
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+        )
         os.close(slave)
         output = b""
         approved_fake_key = False
@@ -304,7 +511,9 @@ class ClaudeNativeResumeTests(unittest.TestCase):
             plain = " ".join(plain.split())
             self.assertIn("Resume session", plain)
             self.assertIn("Picker migration fixture", plain)
-            self.assertFalse(any(path.startswith("/v1/messages") for path, _ in self.server.requests))
+            self.assertFalse(
+                any(path.startswith("/v1/messages") for path, _ in self.server.requests)
+            )
         finally:
             process.terminate()
             process.wait(timeout=10)
@@ -316,9 +525,16 @@ class ClaudeNativeResumeTests(unittest.TestCase):
         old_parent = self.parent
         boundary_id = str(uuid.uuid4())
         boundary = self.common(boundary_id)
-        boundary.update(type="system", subtype="compact_boundary", parentUuid=None,
-                        logicalParentUuid=old_parent, content="Conversation compacted",
-                        level="info", isMeta=False, compactMetadata={"trigger": "auto", "preTokens": 100})
+        boundary.update(
+            type="system",
+            subtype="compact_boundary",
+            parentUuid=None,
+            logicalParentUuid=old_parent,
+            content="Conversation compacted",
+            level="info",
+            isMeta=False,
+            compactMetadata={"trigger": "auto", "preTokens": 100},
+        )
         self.entries.append(boundary)
         self.parent = boundary_id
         summary = self.add_message("user", "Imported compact summary: use fixture-key-bluebird.")

@@ -42,24 +42,64 @@ class _CliFixture(unittest.TestCase):
 
     def thread(self, identifier="thread-one", cwd=None, empty=False):
         path = self.source / f"{identifier}.jsonl"
-        path.write_text('{}\n', encoding="utf-8")
-        thread = Thread(identifier, "Fixture conversation", cwd or str(self.root / "project"), "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", path)
+        path.write_text("{}\n", encoding="utf-8")
+        thread = Thread(
+            identifier,
+            "Fixture conversation",
+            cwd or str(self.root / "project"),
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:00:00Z",
+            path,
+        )
         self.threads.append(thread)
-        self.items[identifier] = [] if empty else [
-            Item(identifier + "-user", "user", "A synthetic fixture", "2026-10-01T00:00:00Z", "userMessage"),
-            Item(identifier + "-assistant", "assistant", "A synthetic response", "2026-10-01T00:00:01Z", "agentMessage"),
-        ]
+        self.items[identifier] = (
+            []
+            if empty
+            else [
+                Item(
+                    identifier + "-user",
+                    "user",
+                    "A synthetic fixture",
+                    "2026-10-01T00:00:00Z",
+                    "userMessage",
+                ),
+                Item(
+                    identifier + "-assistant",
+                    "assistant",
+                    "A synthetic response",
+                    "2026-10-01T00:00:01Z",
+                    "agentMessage",
+                ),
+            ]
+        )
         return thread
 
     def call(self, command, *args):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            code = cli.main([command, "--codex-home", str(self.source), "--claude-home", str(self.destination), "--output-dir", str(self.output), "--json", *args])
+            code = cli.main(
+                [
+                    command,
+                    "--codex-home",
+                    str(self.source),
+                    "--claude-home",
+                    str(self.destination),
+                    "--output-dir",
+                    str(self.output),
+                    "--json",
+                    *args,
+                ]
+            )
         return code, json.loads(stdout.getvalue())
 
     def target(self, thread):
         conversion = convert(thread, self.items[thread.id])
-        return self.destination / "projects" / project_directory(thread.cwd) / f"{conversion.session_id}.jsonl"
+        return (
+            self.destination
+            / "projects"
+            / project_directory(thread.cwd)
+            / f"{conversion.session_id}.jsonl"
+        )
 
 
 class CliTests(_CliFixture):
@@ -88,7 +128,16 @@ class CliTests(_CliFixture):
         target = self.target(thread)
         # A title edit alone must protect the imported session from undo.
         with target.open("a") as stream:
-            stream.write(json.dumps({"type": "custom-title", "sessionId": target.stem, "customTitle": "Continued in Claude"}) + "\n")
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "custom-title",
+                        "sessionId": target.stem,
+                        "customTitle": "Continued in Claude",
+                    }
+                )
+                + "\n"
+            )
         continued_bytes = target.read_bytes()
         self.assertEqual(self.call("verify")[1]["counts"], {"continued": 1})
         self.assertEqual(self.call("migrate")[1]["counts"], {"continued": 1})
@@ -184,15 +233,31 @@ class CliTests(_CliFixture):
     def test_unchanged_round_trip_does_not_duplicate_original(self):
         thread = self.thread()
         origin = self.root / "reverse-origin.json"
-        origin.write_text(json.dumps({
-            "direction": "claude-to-codex", "codexHome": str(self.source), "claudeHome": str(self.destination),
-            "imports": {"original-claude-session": {"sourceThreadId": "original-claude-session", "sessionId": thread.id, "status": "installed", "sha256": cli._digest(thread.rollout_path)}},
-        }))
+        origin.write_text(
+            json.dumps(
+                {
+                    "direction": "claude-to-codex",
+                    "codexHome": str(self.source),
+                    "claudeHome": str(self.destination),
+                    "imports": {
+                        "original-claude-session": {
+                            "sourceThreadId": "original-claude-session",
+                            "sessionId": thread.id,
+                            "status": "installed",
+                            "sha256": cli._digest(thread.rollout_path),
+                        }
+                    },
+                }
+            )
+        )
         code, result = self.call("codex-to-claude", "--origin-manifest", str(origin))
         self.assertEqual(code, 0, result)
         self.assertEqual(result["counts"], {"already-origin": 1})
         self.assertFalse(self.destination.exists())
-        self.assertEqual(self.call("inventory", "--origin-manifest", str(origin))[1]["counts"], {"already-origin": 1})
+        self.assertEqual(
+            self.call("inventory", "--origin-manifest", str(origin))[1]["counts"],
+            {"already-origin": 1},
+        )
         thread.rollout_path.write_text('{}\n{"new":"continuation"}\n')
         code, result = self.call("codex-to-claude", "--origin-manifest", str(origin))
         self.assertEqual(code, 0, result)
@@ -203,7 +268,7 @@ class CliTests(_CliFixture):
         thread = self.thread()
         self.call("migrate")
         target_bytes = self.target(thread).read_bytes()
-        thread.rollout_path.write_text('{}\n{}\n')
+        thread.rollout_path.write_text("{}\n{}\n")
         _, result = self.call("migrate")
         self.assertTrue(result["threads"][0]["sourceChanged"])
         self.assertEqual(self.target(thread).read_bytes(), target_bytes)
@@ -314,8 +379,12 @@ class ReverseCliTests(_CliFixture):
         self.claude_id = conversion.session_id
         self.claude_file = self.target(original)
         self.claude_file.parent.mkdir(parents=True)
-        self.claude_entries = [entry for entry in conversion.entries if entry.get("type") != "c2c-import"]
-        self.claude_file.write_text("".join(json.dumps(entry) + "\n" for entry in self.claude_entries))
+        self.claude_entries = [
+            entry for entry in conversion.entries if entry.get("type") != "c2c-import"
+        ]
+        self.claude_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in self.claude_entries)
+        )
         self.register_calls = 0
         self.unregister_calls = 0
         self.registration_failure = None
@@ -329,7 +398,9 @@ class ReverseCliTests(_CliFixture):
     def registered_path(self, identifier=None):
         from codex_to_claude.codex_native import session_id
 
-        return next((self.source / "sessions").rglob(f"*{identifier or session_id(self.claude_id)}.jsonl"))
+        return next(
+            (self.source / "sessions").rglob(f"*{identifier or session_id(self.claude_id)}.jsonl")
+        )
 
     def register(self, home, identifier, title):
         self.register_calls += 1
@@ -380,7 +451,20 @@ class ReverseCliTests(_CliFixture):
         self.reverse()
         path = self.registered_path()
         with path.open("a") as stream:
-            stream.write(json.dumps({"timestamp": "2026-10-01T00:00:10Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continued in Codex"}]}}) + "\n")
+            stream.write(
+                json.dumps(
+                    {
+                        "timestamp": "2026-10-01T00:00:10Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Continued in Codex"}],
+                        },
+                    }
+                )
+                + "\n"
+            )
         changed = path.read_bytes()
         self.registration_failure = None
         code, result = self.reverse()
@@ -400,19 +484,55 @@ class ReverseCliTests(_CliFixture):
         self.assertEqual(Path(result["threads"][0]["retainedPath"]).read_bytes(), native_bytes)
 
     def test_reverse_unchanged_forward_import_is_skipped(self):
-        self.claude_entries.append({"type": "c2c-import", "source": "codex", "sourceThreadId": "original-codex", "lastMessageUuid": [entry["uuid"] for entry in self.claude_entries if entry.get("type") in ("user", "assistant")][-1]})
-        self.claude_file.write_text("".join(json.dumps(entry) + "\n" for entry in self.claude_entries))
+        self.claude_entries.append(
+            {
+                "type": "c2c-import",
+                "source": "codex",
+                "sourceThreadId": "original-codex",
+                "lastMessageUuid": [
+                    entry["uuid"]
+                    for entry in self.claude_entries
+                    if entry.get("type") in ("user", "assistant")
+                ][-1],
+            }
+        )
+        self.claude_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in self.claude_entries)
+        )
         code, result = self.reverse()
         self.assertEqual(code, 0, result)
         self.assertEqual(result["counts"], {"already-origin": 1})
         self.assertEqual(self.register_calls, 0)
 
     def test_reverse_continued_forward_import_becomes_new_codex_thread(self):
-        parent = [entry["uuid"] for entry in self.claude_entries if entry.get("type") in ("user", "assistant")][-1]
+        parent = [
+            entry["uuid"]
+            for entry in self.claude_entries
+            if entry.get("type") in ("user", "assistant")
+        ][-1]
         original_id = str(uuid.uuid4())
-        self.claude_entries.append({"type": "c2c-import", "source": "codex", "sourceThreadId": original_id, "lastMessageUuid": parent})
-        self.claude_entries.append({"type": "user", "uuid": str(uuid.uuid4()), "parentUuid": parent, "sessionId": self.claude_id, "cwd": str(self.root / "project"), "timestamp": "2026-10-01T00:00:10Z", "message": {"role": "user", "content": "A new turn in Claude"}})
-        self.claude_file.write_text("".join(json.dumps(entry) + "\n" for entry in self.claude_entries))
+        self.claude_entries.append(
+            {
+                "type": "c2c-import",
+                "source": "codex",
+                "sourceThreadId": original_id,
+                "lastMessageUuid": parent,
+            }
+        )
+        self.claude_entries.append(
+            {
+                "type": "user",
+                "uuid": str(uuid.uuid4()),
+                "parentUuid": parent,
+                "sessionId": self.claude_id,
+                "cwd": str(self.root / "project"),
+                "timestamp": "2026-10-01T00:00:10Z",
+                "message": {"role": "user", "content": "A new turn in Claude"},
+            }
+        )
+        self.claude_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in self.claude_entries)
+        )
         code, result = self.reverse()
         self.assertEqual(code, 0, result)
         self.assertEqual(result["counts"], {"installed": 1})

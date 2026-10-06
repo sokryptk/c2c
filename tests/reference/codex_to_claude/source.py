@@ -1,4 +1,5 @@
 """Prefer display projections; use rollouts for legacy history and live tails."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -116,8 +117,9 @@ def _json(value: str | bytes, location: str) -> dict[str, Any]:
     return result
 
 
-def _records(path: Path, *, start_offset: int = 0, start_ordinal: int = 0,
-             compactions_only: bool = False) -> Iterator[tuple[int, dict[str, Any]]]:
+def _records(
+    path: Path, *, start_offset: int = 0, start_ordinal: int = 0, compactions_only: bool = False
+) -> Iterator[tuple[int, dict[str, Any]]]:
     """Read a fixed-size snapshot, so an active source cannot grow this iterator."""
     with path.open("rb") as stream:
         end = os.fstat(stream.fileno()).st_size
@@ -139,8 +141,11 @@ def _records(path: Path, *, start_offset: int = 0, start_ordinal: int = 0,
                 record = _json(line, f"{path}: record {current}")
             except SourceError:
                 if stream.tell() == end and not line.endswith(b"\n"):
-                    warnings.warn(f"Incomplete final rollout record in {path}; retry after the writer finishes",
-                                  SourceWarning, stacklevel=2)
+                    warnings.warn(
+                        f"Incomplete final rollout record in {path}; retry after the writer finishes",
+                        SourceWarning,
+                        stacklevel=2,
+                    )
                     break
                 raise
             yield int(record.get("ordinal", current)), record
@@ -185,7 +190,7 @@ def _rollout_path(value: str, home: Path) -> Path:
     # sessions/ or archived_sessions/ without traversing arbitrary directories.
     for directory in ("sessions", "archived_sessions"):
         if directory in path.parts:
-            candidate = home.joinpath(*path.parts[path.parts.index(directory):])
+            candidate = home.joinpath(*path.parts[path.parts.index(directory) :])
             if candidate.exists():
                 return candidate
     return path
@@ -202,8 +207,12 @@ def list_threads(codex_home: str | Path) -> list[Thread]:
                 raise SourceError(f"Unsupported state schema: {database}")
             parents = {}
             if "thread_spawn_edges" in tables:
-                parents = {r[0]: r[1] for r in connection.execute(
-                    "SELECT child_thread_id, parent_thread_id FROM thread_spawn_edges")}
+                parents = {
+                    r[0]: r[1]
+                    for r in connection.execute(
+                        "SELECT child_thread_id, parent_thread_id FROM thread_spawn_edges"
+                    )
+                }
             for row in connection.execute("SELECT * FROM threads"):
                 data = dict(row)
                 path = _rollout_path(data["rollout_path"], home)
@@ -214,12 +223,22 @@ def list_threads(codex_home: str | Path) -> list[Thread]:
                 created = data.get("created_at_ms")
                 updated = data.get("updated_at_ms")
                 threads[data["id"]] = Thread(
-                    id=data["id"], title=data.get("name") or data.get("title") or f"Codex {data['id']}",
-                    cwd=data.get("cwd", ""), rollout_path=path,
-                    created_at=_timestamp(created if created is not None else data.get("created_at"), milliseconds=created is not None),
-                    updated_at=_timestamp(updated if updated is not None else data.get("updated_at"), milliseconds=updated is not None),
-                    parent_id=parent, source=data.get("source", "cli"),
-                    archived=bool(data.get("archived", False)), history_mode=data.get("history_mode", "legacy"),
+                    id=data["id"],
+                    title=data.get("name") or data.get("title") or f"Codex {data['id']}",
+                    cwd=data.get("cwd", ""),
+                    rollout_path=path,
+                    created_at=_timestamp(
+                        created if created is not None else data.get("created_at"),
+                        milliseconds=created is not None,
+                    ),
+                    updated_at=_timestamp(
+                        updated if updated is not None else data.get("updated_at"),
+                        milliseconds=updated is not None,
+                    ),
+                    parent_id=parent,
+                    source=data.get("source", "cli"),
+                    archived=bool(data.get("archived", False)),
+                    history_mode=data.get("history_mode", "legacy"),
                 )
     known_paths = {t.rollout_path.resolve() for t in threads.values()}
     for directory in ("sessions", "archived_sessions"):
@@ -232,20 +251,27 @@ def list_threads(codex_home: str | Path) -> list[Thread]:
                 continue
             source = meta.get("source", "cli")
             threads[identifier] = Thread(
-                id=identifier, title=meta.get("title") or f"Codex {identifier}", cwd=meta.get("cwd", ""),
+                id=identifier,
+                title=meta.get("title") or f"Codex {identifier}",
+                cwd=meta.get("cwd", ""),
                 created_at=_timestamp(meta.get("timestamp", path.stat().st_mtime)),
-                updated_at=_timestamp(path.stat().st_mtime), rollout_path=path,
-                parent_id=meta.get("forked_from_id") or meta.get("parent_thread_id") or _source_parent(source),
+                updated_at=_timestamp(path.stat().st_mtime),
+                rollout_path=path,
+                parent_id=meta.get("forked_from_id")
+                or meta.get("parent_thread_id")
+                or _source_parent(source),
                 source=source if isinstance(source, str) else json.dumps(source),
-                archived=directory == "archived_sessions", history_mode=meta.get("history_mode", "legacy"),
+                archived=directory == "archived_sessions",
+                history_mode=meta.get("history_mode", "legacy"),
             )
     for identifier, thread in tuple(threads.items()):
         if str(_metadata(thread.rollout_path).get("originator", "")).startswith("c2c:claude:"):
             from .codex_native import read_origin
 
             original_id, unchanged = read_origin(thread)
-            threads[identifier] = replace(thread, original_claude_id=original_id,
-                                           unchanged_import=unchanged)
+            threads[identifier] = replace(
+                thread, original_claude_id=original_id, unchanged_import=unchanged
+            )
     return sorted(threads.values(), key=lambda t: (t.updated_at, t.id), reverse=True)
 
 
@@ -262,7 +288,16 @@ def _content(content: Any) -> tuple[str, tuple[dict[str, Any], ...]]:
         kind = part.get("type", "")
         if kind in ("text", "input_text", "output_text"):
             texts.append(str(part.get("text", "")))
-        elif kind in ("image", "input_image", "localImage", "image_url", "file", "input_file", "resource_link", "skill"):
+        elif kind in (
+            "image",
+            "input_image",
+            "localImage",
+            "image_url",
+            "file",
+            "input_file",
+            "resource_link",
+            "skill",
+        ):
             path = part.get("path") or part.get("file_path")
             url = part.get("image_url") or part.get("url") or part.get("uri")
             if isinstance(url, dict):
@@ -272,31 +307,44 @@ def _content(content: Any) -> tuple[str, tuple[dict[str, Any], ...]]:
                 mime = mimetypes.guess_type(path)[0]
             if not url and part.get("data") and kind == "image":
                 url = f"data:{mime or 'image/png'};base64,{part['data']}"
-            item = {k: v for k, v in {"path": path, "url": url, "media_type": mime,
-                    "name": part.get("name") or part.get("filename"), "type": kind}.items() if v is not None}
+            fields = {
+                "path": path,
+                "url": url,
+                "media_type": mime,
+                "name": part.get("name") or part.get("filename"),
+                "type": kind,
+            }
+            item = {key: value for key, value in fields.items() if value is not None}
             # Upload IDs and embedded payloads need not have a filesystem path.
             for key in ("file_id", "file_data", "file_url"):
                 if key in part:
                     item[key] = part[key]
             attachments.append(item)
         elif kind not in ("reasoning", "encrypted_text"):
-            warnings.warn(f"Unsupported content block type {kind!r}; preserved as an attachment",
-                          SourceWarning, stacklevel=2)
+            warnings.warn(
+                f"Unsupported content block type {kind!r}; preserved as an attachment",
+                SourceWarning,
+                stacklevel=2,
+            )
             attachments.append(dict(part))
     return "\n".join(texts), tuple(attachments)
 
 
 def _resolve_attachments(item: Item, thread: Thread) -> Item:
     """Resolve source-relative paths before the destination process changes cwd."""
+
     def absolute(value: str) -> str:
         path = Path(value).expanduser()
         if not path.is_absolute() and thread.cwd:
             path = Path(thread.cwd) / path
         return str(path)
 
-    attachments = tuple(dict(attachment, path=absolute(attachment["path"]))
-                        if isinstance(attachment.get("path"), str) else attachment
-                        for attachment in item.attachments)
+    resolved_attachments = []
+    for attachment in item.attachments:
+        if isinstance(attachment.get("path"), str):
+            attachment = dict(attachment, path=absolute(attachment["path"]))
+        resolved_attachments.append(attachment)
+    attachments = tuple(resolved_attachments)
     raw = item.raw
     if raw and item.kind in ("imageView", "imageGeneration"):
         raw = dict(raw)
@@ -307,8 +355,17 @@ def _resolve_attachments(item: Item, thread: Thread) -> Item:
 
 
 _PRIVATE = {"reasoning", "hookPrompt", "contextCompaction", "subAgentActivity"}
-_TOOLS = {"commandExecution", "fileChange", "functionCallOutput", "mcpToolCall", "collabAgentToolCall",
-          "imageView", "imageGeneration", "webSearch", "sleep"}
+_TOOLS = {
+    "commandExecution",
+    "fileChange",
+    "functionCallOutput",
+    "mcpToolCall",
+    "collabAgentToolCall",
+    "imageView",
+    "imageGeneration",
+    "webSearch",
+    "sleep",
+}
 
 
 def _projected(data: dict[str, Any], identifier: str, timestamp: str, ordinal: int) -> Item | None:
@@ -321,7 +378,9 @@ def _projected(data: dict[str, Any], identifier: str, timestamp: str, ordinal: i
     if kind == "agentMessage":
         if data.get("phase") == "analysis":
             return None
-        return Item(identifier, "assistant", data.get("text", ""), timestamp, kind, (), None, ordinal)
+        return Item(
+            identifier, "assistant", data.get("text", ""), timestamp, kind, (), None, ordinal
+        )
     if kind in _TOOLS:
         output = data.get("aggregatedOutput", data.get("output", ""))
         if kind == "mcpToolCall":
@@ -331,9 +390,19 @@ def _projected(data: dict[str, Any], identifier: str, timestamp: str, ordinal: i
         if kind in ("imageView", "imageGeneration"):
             path = data.get("path") or data.get("savedPath")
             if path:
-                attachments += ({"path": path, "type": "localImage", "media_type": mimetypes.guess_type(path)[0]},)
+                attachments += (
+                    {
+                        "path": path,
+                        "type": "localImage",
+                        "media_type": mimetypes.guess_type(path)[0],
+                    },
+                )
         return Item(identifier, "tool", text, timestamp, kind, attachments, data, ordinal)
-    warnings.warn(f"Unsupported projected item type {kind!r} at ordinal {ordinal}", SourceWarning, stacklevel=2)
+    warnings.warn(
+        f"Unsupported projected item type {kind!r} at ordinal {ordinal}",
+        SourceWarning,
+        stacklevel=2,
+    )
     return None
 
 
@@ -342,25 +411,52 @@ def _response(data: dict[str, Any], timestamp: str, ordinal: int, prefix: str) -
     identifier = data.get("id") or data.get("call_id") or f"{prefix}:{ordinal}"
     if kind == "message":
         role = data.get("role")
-        if role not in ("user", "assistant") or data.get("channel") in ("analysis", "justify", "confidence"):
+        if role not in ("user", "assistant") or data.get("channel") in (
+            "analysis",
+            "justify",
+            "confidence",
+        ):
             return None
         text, attachments = _content(data.get("content", []))
         if not text and not attachments:
             return None
-        return Item(identifier, role, text, timestamp, "userMessage" if role == "user" else "agentMessage",
-                    attachments, None, ordinal)
-    if kind in ("function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output",
-                "web_search_call", "image_generation_call"):
+        return Item(
+            identifier,
+            role,
+            text,
+            timestamp,
+            "userMessage" if role == "user" else "agentMessage",
+            attachments,
+            None,
+            ordinal,
+        )
+    if kind in (
+        "function_call",
+        "custom_tool_call",
+        "function_call_output",
+        "custom_tool_call_output",
+        "web_search_call",
+        "image_generation_call",
+    ):
         text, attachments = _content(data.get("output", ""))
         return Item(identifier, "tool", text, timestamp, kind, attachments, data, ordinal)
     return None
 
 
-def _rollout_items(thread: Thread, *, start_offset: int = 0, start_ordinal: int = 0) -> Iterator[Item]:
-    for ordinal, record in _records(thread.rollout_path, start_offset=start_offset, start_ordinal=start_ordinal):
+def _rollout_items(
+    thread: Thread, *, start_offset: int = 0, start_ordinal: int = 0
+) -> Iterator[Item]:
+    for ordinal, record in _records(
+        thread.rollout_path, start_offset=start_offset, start_ordinal=start_ordinal
+    ):
         if record.get("type") != "response_item":
             continue
-        item = _response(record.get("payload", {}), _timestamp(record.get("timestamp", thread.updated_at)), ordinal, thread.id)
+        item = _response(
+            record.get("payload", {}),
+            _timestamp(record.get("timestamp", thread.updated_at)),
+            ordinal,
+            thread.id,
+        )
         if item is not None:
             yield _resolve_attachments(item, thread)
 
@@ -371,10 +467,15 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
     Display paths may be overwritten. Event order cannot identify images across
     concurrent calls or multiple images emitted by one exec script.
     """
-    targets = {item.ordinal: item for item in items
-               if item.kind in ("userMessage", "imageView")
-               and any(attachment.get("type") == "localImage" and attachment.get("path")
-                       for attachment in item.attachments)}
+    targets = {
+        item.ordinal: item
+        for item in items
+        if item.kind in ("userMessage", "imageView")
+        and any(
+            attachment.get("type") == "localImage" and attachment.get("path")
+            for attachment in item.attachments
+        )
+    }
     if not targets or not thread.rollout_path.is_file():
         return items
     recovered: dict[int, Item] = {}
@@ -385,12 +486,18 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
     def images(content: Any) -> list[dict[str, Any]]:
         if not isinstance(content, list):
             return []
-        return [part for part in content if isinstance(part, dict)
-                and part.get("type") in ("input_image", "image", "image_url")]
+        return [
+            part
+            for part in content
+            if isinstance(part, dict) and part.get("type") in ("input_image", "image", "image_url")
+        ]
 
     def merge(item: Item, parts: list[dict[str, Any]]) -> bool:
-        indices = [index for index, attachment in enumerate(item.attachments)
-                   if attachment.get("type") == "localImage" and attachment.get("path")]
+        indices = [
+            index
+            for index, attachment in enumerate(item.attachments)
+            if attachment.get("type") == "localImage" and attachment.get("path")
+        ]
         if len(indices) != len(parts):
             return False
         attachments = list(item.attachments)
@@ -415,8 +522,11 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
         else:
             # Raw Rust event variants use snake_case inside UserMessage;
             # SQLite's display projection uses camelCase.
-            paths = [part.get("path") for part in event.get("content", [])
-                     if isinstance(part, dict) and part.get("type") in ("local_image", "localImage")]
+            paths = [
+                part.get("path")
+                for part in event.get("content", [])
+                if isinstance(part, dict) and part.get("type") in ("local_image", "localImage")
+            ]
         if not all(isinstance(path, str) for path in paths):
             return False
         event_paths = []
@@ -430,7 +540,9 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
             if not path.is_absolute() and thread.cwd:
                 path = Path(thread.cwd) / path
             event_paths.append(str(path))
-        return event_paths == [a.get("path") for a in item.attachments if a.get("type") == "localImage"]
+        return event_paths == [
+            a.get("path") for a in item.attachments if a.get("type") == "localImage"
+        ]
 
     for ordinal, record in _records(thread.rollout_path):
         data = record.get("payload", {})
@@ -480,9 +592,13 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
             if verified and previous_user is not None and previous_user[0] == ordinal - 1:
                 if not merge(item, previous_user[1]):
                     ambiguous.add(ordinal)
-        elif isinstance(event_kind, str) and event_kind.casefold() in ("imageview", "imagegeneration"):
+        elif isinstance(event_kind, str) and event_kind.casefold() in (
+            "imageview",
+            "imagegeneration",
+        ):
             if len(pending) == 1:
-                next(iter(pending.values())).append(item if verified and item.kind == "imageView" else None)
+                group = next(iter(pending.values()))
+                group.append(item if verified and item.kind == "imageView" else None)
             elif verified:
                 ambiguous.add(ordinal)
         previous_user = None
@@ -490,8 +606,11 @@ def _recover_projected_images(items: list[Item], thread: Thread) -> list[Item]:
         ambiguous.update(item.ordinal for item in group if item is not None)
     ambiguous.difference_update(recovered)
     if ambiguous:
-        warnings.warn(f"Raw image recovery was ambiguous for {len(ambiguous)} projected item(s); kept original paths",
-                      SourceWarning, stacklevel=2)
+        warnings.warn(
+            f"Raw image recovery was ambiguous for {len(ambiguous)} projected item(s); kept original paths",
+            SourceWarning,
+            stacklevel=2,
+        )
     return [recovered.get(item.ordinal, item) for item in items]
 
 
@@ -510,25 +629,46 @@ def read_items(thread: Thread, codex_home: str | Path) -> Iterator[Item]:
             tables = _tables(connection)
             if "thread_items" in tables:
                 if "thread_history_projection_state" in tables:
-                    row = connection.execute("SELECT * FROM thread_history_projection_state WHERE thread_id=?", (thread.id,)).fetchone()
+                    row = connection.execute(
+                        "SELECT * FROM thread_history_projection_state WHERE thread_id=?",
+                        (thread.id,),
+                    ).fetchone()
                     projection = dict(row) if row else None
                 for row in connection.execute(
-                    "SELECT item_id, item_json, created_at_ms, rollout_ordinal FROM thread_items WHERE thread_id=? ORDER BY rollout_ordinal, item_id", (thread.id,)
+                    "SELECT item_id, item_json, created_at_ms, rollout_ordinal FROM thread_items WHERE thread_id=? ORDER BY rollout_ordinal, item_id",
+                    (thread.id,),
                 ):
                     projected = True
-                    data = _json(row["item_json"], f"history thread {thread.id}, item {row['item_id']}")
-                    item = _projected(data, row["item_id"], _timestamp(row["created_at_ms"], milliseconds=True), row["rollout_ordinal"])
+                    data = _json(
+                        row["item_json"], f"history thread {thread.id}, item {row['item_id']}"
+                    )
+                    item = _projected(
+                        data,
+                        row["item_id"],
+                        _timestamp(row["created_at_ms"], milliseconds=True),
+                        row["rollout_ordinal"],
+                    )
                     if item is not None:
                         projected_items.append(_resolve_attachments(item, thread))
     if projected or projection:
         yield from _recover_projected_images(projected_items, thread)
         if projection and thread.rollout_path.is_file():
-            yield from _rollout_items(thread, start_offset=projection["next_rollout_byte_offset"], start_ordinal=projection["next_rollout_ordinal"])
+            yield from _rollout_items(
+                thread,
+                start_offset=projection["next_rollout_byte_offset"],
+                start_ordinal=projection["next_rollout_ordinal"],
+            )
         elif not projection:
-            warnings.warn(f"Projected thread {thread.id} has no projection cursor; live tail cannot be verified", SourceWarning, stacklevel=2)
+            warnings.warn(
+                f"Projected thread {thread.id} has no projection cursor; live tail cannot be verified",
+                SourceWarning,
+                stacklevel=2,
+            )
         return
     if not thread.rollout_path.is_file():
-        raise SourceError(f"No projected history or rollout for thread {thread.id}: {thread.rollout_path}")
+        raise SourceError(
+            f"No projected history or rollout for thread {thread.id}: {thread.rollout_path}"
+        )
     yield from _rollout_items(thread)
 
 
@@ -544,15 +684,34 @@ def read_compaction(thread: Thread) -> Compaction | None:
         timestamp = _timestamp(record.get("timestamp", thread.updated_at))
         replacement = data.get("replacement_history") or []
         summary = data.get("message") or ""
-        summaries = [entry for entry in replacement
-                     if entry.get("type") == "message" and entry.get("role") == "assistant" and entry.get("channel") == "summary"]
+        summaries = [
+            entry
+            for entry in replacement
+            if entry.get("type") == "message"
+            and entry.get("role") == "assistant"
+            and entry.get("channel") == "summary"
+        ]
         if not summary:
             summary = "\n\n".join(_content(entry.get("content", []))[0] for entry in summaries)
-        items = tuple(item for index, entry in enumerate(replacement)
-                      if entry not in summaries
-                      and (item := _response(entry, timestamp, ordinal, f"{thread.id}:compaction:{index}")) is not None
-                      and not (summary and item.role == "assistant" and item.text == summary))
-        encrypted = any(entry.get("type") == "compaction" and entry.get("encrypted_content") for entry in replacement)
-        latest = Compaction(summary=summary, items=tuple(_resolve_attachments(item, thread) for item in items),
-                            timestamp=timestamp, ordinal=ordinal, encrypted=encrypted)
+        items = []
+        for index, entry in enumerate(replacement):
+            if entry in summaries:
+                continue
+            item = _response(entry, timestamp, ordinal, f"{thread.id}:compaction:{index}")
+            if item is None:
+                continue
+            if summary and item.role == "assistant" and item.text == summary:
+                continue
+            items.append(item)
+        encrypted = any(
+            entry.get("type") == "compaction" and entry.get("encrypted_content")
+            for entry in replacement
+        )
+        latest = Compaction(
+            summary=summary,
+            items=tuple(_resolve_attachments(item, thread) for item in items),
+            timestamp=timestamp,
+            ordinal=ordinal,
+            encrypted=encrypted,
+        )
     return latest

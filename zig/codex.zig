@@ -15,4 +15,5 @@ pub const unregister = native.unregister;
 test {
     _ = codec;
     _ = native;
+    _ = @import("codex/test.zig");
 }

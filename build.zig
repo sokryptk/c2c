@@ -13,7 +13,9 @@ pub fn build(b: *std.Build) void {
     const executable = b.addExecutable(.{ .name = "c2c", .root_module = module });
     b.installArtifact(executable);
     const run = b.addRunArtifact(executable);
-    if (b.args) |args| run.addArgs(args);
+    if (b.args) |args| {
+        run.addArgs(args);
+    }
     b.step("run", "Run c2c").dependOn(&run.step);
     const tests = b.addTest(.{ .root_module = module });
     const check = b.addRunArtifact(tests);

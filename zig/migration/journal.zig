@@ -1,119 +1,179 @@
 const std = @import("std");
-const H = @import("../common.zig");
-const A = H.Allocator;
-const V = H.Value;
+const common = @import("../common.zig");
+const Allocator = common.Allocator;
+const Value = common.Value;
 const Options = @import("../cli/options.zig").Options;
 const writeAll = @import("../os.zig").writeAll;
 
-pub fn now(a: A) !V {
-    return H.str(try H.timestamp(a, H.nowMillis()));
+pub fn now(allocator: Allocator) !Value {
+    return common.str(try common.timestamp(allocator, common.nowMillis()));
 }
 
 pub fn pathWithin(path: []const u8, root: []const u8) bool {
-    return H.eq(path, root) or (std.mem.startsWith(u8, path, root) and (std.mem.endsWith(u8, root, "/") or (path.len > root.len and path[root.len] == '/')));
+    if (common.eq(path, root)) {
+        return true;
+    }
+    if (!std.mem.startsWith(u8, path, root)) {
+        return false;
+    }
+    if (std.mem.endsWith(u8, root, "/")) {
+        return true;
+    }
+    return path.len > root.len and path[root.len] == '/';
 }
 
-fn targetRoot(a: A, options: Options) ![]const u8 {
+fn targetRoot(allocator: Allocator, options: Options) ![]const u8 {
     return switch (options.to) {
-        .claude => H.join(a, &.{ options.claude_home, "projects" }),
-        .codex => H.join(a, &.{ options.codex_home, "sessions" }),
-        .omp => H.join(a, &.{ options.omp_home, "sessions" }),
-        .opencode => H.join(a, &.{ options.opencode_home, "c2c-imports" }),
+        .claude => common.join(allocator, &.{ options.claude_home, "projects" }),
+        .codex => common.join(allocator, &.{ options.codex_home, "sessions" }),
+        .omp => common.join(allocator, &.{ options.omp_home, "sessions" }),
+        .opencode => common.join(allocator, &.{ options.opencode_home, "c2c-imports" }),
     };
 }
 
-pub fn safeTarget(a: A, options: Options, path: []const u8) ![]const u8 {
-    if (!std.fs.path.isAbsolute(path)) return error.UnsafeTargetPath;
-    if (H.stat(path)) |info| {
-        if (info.is_symlink) return error.UnsafeTargetPath;
+pub fn safeTarget(allocator: Allocator, options: Options, path: []const u8) ![]const u8 {
+    if (!std.fs.path.isAbsolute(path)) {
+        return error.UnsafeTargetPath;
+    }
+    if (common.stat(path)) |info| {
+        if (info.is_symlink) {
+            return error.UnsafeTargetPath;
+        }
     } else |err| {
-        if (err != error.FileNotFound) return err;
+        if (err != error.FileNotFound) {
+            return err;
+        }
     }
     const parent = std.fs.path.dirname(path) orelse return error.UnsafeTargetPath;
-    const root = try H.canonicalPath(a, try targetRoot(a, options));
-    if (!pathWithin(try H.canonicalPath(a, parent), root)) return error.UnsafeTargetPath;
+    const root = try common.canonicalPath(allocator, try targetRoot(allocator, options));
+    if (!pathWithin(try common.canonicalPath(allocator, parent), root)) {
+        return error.UnsafeTargetPath;
+    }
     return path;
 }
 
 pub fn syncAncestors(path: []const u8) !void {
     var current = path;
     while (true) {
-        try H.syncDir(current);
+        try common.syncDir(current);
         const parent = std.fs.path.dirname(current) orelse break;
-        if (H.eq(parent, current)) break;
+        if (common.eq(parent, current)) {
+            break;
+        }
         current = parent;
     }
 }
 
 var nonce: u64 = 0;
 
-pub fn unique(a: A) ![]const u8 {
+pub fn unique(allocator: Allocator) ![]const u8 {
     nonce += 1;
-    return H.fmt(a, "{d}-{d}-{d}", .{ H.nowMillis(), H.c.getpid(), nonce });
+    return common.fmt(allocator, "{d}-{d}-{d}", .{ common.nowMillis(), common.c.getpid(), nonce });
 }
 
-pub fn writeJsonl(a: A, path: []const u8, entries: []const V) !void {
-    const z = try a.dupeZ(u8, path);
-    const fd = H.c.open(z, H.c.O_WRONLY | H.c.O_CREAT | H.c.O_EXCL | H.c.O_NOFOLLOW | H.c.O_CLOEXEC, @as(c_uint, 0o600));
-    if (fd < 0) return error.StageCreateFailed;
-    defer _ = H.c.close(fd);
+pub fn writeJsonl(allocator: Allocator, path: []const u8, entries: []const Value) !void {
+    const z = try allocator.dupeZ(u8, path);
+    const flags = common.c.O_WRONLY | common.c.O_CREAT | common.c.O_EXCL | common.c.O_NOFOLLOW | common.c.O_CLOEXEC;
+    const fd = common.c.open(z, flags, @as(c_uint, 0o600));
+    if (fd < 0) {
+        return error.StageCreateFailed;
+    }
+    defer _ = common.c.close(fd);
     for (entries) |entry| {
         var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer scratch.deinit();
-        writeAll(fd, try H.json(scratch.allocator(), entry)) catch return error.WriteFailed;
+        writeAll(fd, try common.json(scratch.allocator(), entry)) catch return error.WriteFailed;
         writeAll(fd, "\n") catch return error.WriteFailed;
     }
-    if (H.c.fsync(fd) != 0) return error.SyncFailed;
+    if (common.c.fsync(fd) != 0) {
+        return error.SyncFailed;
+    }
 }
 
 pub const State = struct {
-    a: A,
+    allocator: Allocator,
     options: Options,
-    manifest: V,
+    manifest: Value,
     path: []const u8,
-    pub fn imports(self: *State) *V {
+    pub fn imports(self: *State) *Value {
         return self.manifest.object.getPtr("imports").?;
     }
-    pub fn record(self: *State, id: []const u8) V {
-        return H.get(self.imports().*, id);
+    pub fn record(self: *State, id: []const u8) Value {
+        return common.get(self.imports().*, id);
     }
-    pub fn put(self: *State, id: []const u8, value: V) !void {
-        try H.set(self.a, self.imports(), id, value);
+    pub fn put(self: *State, id: []const u8, value: Value) !void {
+        try common.set(self.allocator, self.imports(), id, value);
     }
     pub fn save(self: *State) !void {
-        try H.set(self.a, &self.manifest, "updatedAt", try now(self.a));
+        try common.set(self.allocator, &self.manifest, "updatedAt", try now(self.allocator));
         var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer scratch.deinit();
-        const a = scratch.allocator();
-        try H.atomicWrite(a, self.path, try H.json(a, self.manifest));
+        const allocator = scratch.allocator();
+        try common.atomicWrite(allocator, self.path, try common.json(allocator, self.manifest));
     }
-    pub fn rememberUndo(self: *State, value: V) !void {
-        const backup = H.s(value, "undoBackupPath");
-        if (backup.len == 0) return;
-        var retained = H.get(self.manifest, "retainedUndos");
-        if (retained == .null) retained = try H.arr(self.a, &.{});
-        for (H.list(retained)) |entry| if (H.eq(H.s(entry, "undoBackupPath"), backup)) return;
-        try retained.array.append(try H.clone(self.a, value));
-        try H.set(self.a, &self.manifest, "retainedUndos", retained);
+    pub fn rememberUndo(self: *State, value: Value) !void {
+        const backup = common.stringField(value, "undoBackupPath");
+        if (backup.len == 0) {
+            return;
+        }
+        var retained = common.get(self.manifest, "retainedUndos");
+        if (retained == .null) {
+            retained = try common.arr(self.allocator, &.{});
+        }
+        for (common.list(retained)) |entry| {
+            if (common.eq(common.stringField(entry, "undoBackupPath"), backup)) {
+                return;
+            }
+        }
+        try retained.array.append(try common.clone(self.allocator, value));
+        try common.set(self.allocator, &self.manifest, "retainedUndos", retained);
     }
 };
 
-pub fn loadState(a: A, options: Options) !State {
-    const path = try H.join(a, &.{ options.output_dir, "manifest.json" });
-    var manifest: V = undefined;
-    if (H.exists(path)) {
-        manifest = try H.parse(a, try H.readFile(a, path));
-        if (H.integer(H.get(manifest, "version")) != 1 or H.get(manifest, "imports") != .object) return error.UnsupportedManifest;
-        if (H.s(manifest, "sourceHome").len > 0) {
-            if (!H.eq(H.s(manifest, "sourceHome"), options.home(options.from)) or !H.eq(H.s(manifest, "targetHome"), options.home(options.to))) return error.ManifestHomesMismatch;
-        } else if (!H.eq(H.s(manifest, "codexHome"), options.codex_home) or !H.eq(H.s(manifest, "claudeHome"), options.claude_home)) return error.ManifestHomesMismatch;
-        const direction = if (H.s(manifest, "direction").len == 0) "codex-to-claude" else H.s(manifest, "direction");
-        if (!H.eq(direction, try options.direction(a))) return error.ManifestDirectionMismatch;
-    } else manifest = try H.obj(a, &.{
-        .{ "version", H.num(1) },                      .{ "createdAt", try now(a) },                         .{ "codexHome", H.str(options.codex_home) },
-        .{ "claudeHome", H.str(options.claude_home) }, .{ "direction", H.str(try options.direction(a)) },    .{ "from", H.str(@tagName(options.from)) },
-        .{ "to", H.str(@tagName(options.to)) },        .{ "sourceHome", H.str(options.home(options.from)) }, .{ "targetHome", H.str(options.home(options.to)) },
-        .{ "ompHome", H.str(options.omp_home) },       .{ "opencodeHome", H.str(options.opencode_home) },    .{ "imports", try H.obj(a, &.{}) },
-    });
-    return .{ .a = a, .options = options, .manifest = manifest, .path = path };
+pub fn loadState(allocator: Allocator, options: Options) !State {
+    const path = try common.join(allocator, &.{ options.output_dir, "manifest.json" });
+    var manifest: Value = undefined;
+    if (common.exists(path)) {
+        manifest = try common.parse(allocator, try common.readFile(allocator, path));
+        if (common.integer(common.get(manifest, "version")) != 1 or common.get(manifest, "imports") != .object) {
+            return error.UnsupportedManifest;
+        }
+        if (common.stringField(manifest, "sourceHome").len > 0) {
+            if (!common.eq(common.stringField(manifest, "sourceHome"), options.home(options.from)) or
+                !common.eq(common.stringField(manifest, "targetHome"), options.home(options.to)))
+            {
+                return error.ManifestHomesMismatch;
+            }
+        } else if (!common.eq(common.stringField(manifest, "codexHome"), options.codex_home) or
+            !common.eq(common.stringField(manifest, "claudeHome"), options.claude_home))
+        {
+            return error.ManifestHomesMismatch;
+        }
+        const saved_direction = common.stringField(manifest, "direction");
+        const direction = if (saved_direction.len == 0) "codex-to-claude" else saved_direction;
+        if (!common.eq(direction, try options.direction(allocator))) {
+            return error.ManifestDirectionMismatch;
+        }
+    } else {
+        manifest = try common.obj(allocator, &.{
+            .{ "version", common.num(1) },
+            .{ "createdAt", try now(allocator) },
+            .{ "codexHome", common.str(options.codex_home) },
+            .{ "claudeHome", common.str(options.claude_home) },
+            .{ "direction", common.str(try options.direction(allocator)) },
+            .{ "from", common.str(@tagName(options.from)) },
+            .{ "to", common.str(@tagName(options.to)) },
+            .{ "sourceHome", common.str(options.home(options.from)) },
+            .{ "targetHome", common.str(options.home(options.to)) },
+            .{ "ompHome", common.str(options.omp_home) },
+            .{ "opencodeHome", common.str(options.opencode_home) },
+            .{ "imports", try common.obj(allocator, &.{}) },
+        });
+    }
+    return .{
+        .allocator = allocator,
+        .options = options,
+        .manifest = manifest,
+        .path = path,
+    };
 }

@@ -8,3 +8,4 @@ dist/
 .zig-cache/
 zig-out/
 .tools/
+.ruff_cache/
